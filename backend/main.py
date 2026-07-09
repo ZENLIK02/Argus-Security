@@ -29,9 +29,13 @@ app.add_middleware(
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_SITE_DIR = PROJECT_ROOT / "test-site"
+WEBSITE_TESTONLY_DIR = PROJECT_ROOT / "Website_testonly"
 
 if TEST_SITE_DIR.exists():
     app.mount("/test-site", StaticFiles(directory=str(TEST_SITE_DIR), html=True), name="test-site")
+
+if WEBSITE_TESTONLY_DIR.exists():
+    app.mount("/Website_testonly", StaticFiles(directory=str(WEBSITE_TESTONLY_DIR), html=True), name="website-testonly")
 
 
 RiskLevel = Literal["SAFE", "SUSPICIOUS", "HIGH_RISK"]

@@ -38,6 +38,16 @@ uvicorn main:app --reload --port 8000
 | Roblox | `https://www.roblox.com` | SAFE | Trusted domain, no warning |
 | Yahoo Finance | `https://finance.yahoo.com` | SAFE | Finance/account words should not trigger phishing by themselves |
 
+## Adversarial Test-Only Cases
+
+These pages are intentionally designed to be hard for Argus to catch. They should be used for beta QA and detector improvement, not as normal demo pass/fail pages.
+
+| Test | URL / Page | Expected | Checks |
+| --- | --- | --- | --- |
+| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | Hard evasive simulation | Uses text fields, delayed JavaScript-built endpoint, no direct external form action, no typed value exfiltration |
+| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | Hard evasive simulation | Uses popup/postMessage consent pattern, no password field, no direct form submit |
+| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | Hard evasive simulation | Uses clipboard/file metadata pattern, guarded network behavior, no typed value exfiltration |
+
 ## Export Report Test
 
 1. Open any test page.

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calendar Connector</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fbfcff;
+      --panel: #ffffff;
+      --border: #e3e8f1;
+      --text: #172033;
+      --muted: #617086;
+      --accent: #1570ef;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      background: #ffffff;
+      padding: 18px 28px;
+    }
+
+    .brand {
+      font-weight: 800;
+    }
+
+    main {
+      width: min(820px, calc(100vw - 32px));
+      margin: 54px auto;
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    section {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+    }
+
+    p,
+    li {
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #ffffff;
+      cursor: pointer;
+      font: 700 15px Arial, Helvetica, sans-serif;
+      padding: 12px 16px;
+    }
+
+    .small {
+      margin-top: 14px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 720px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">Calendar Connector</div>
+  </header>
+
+  <main>
+    <section>
+      <h1>Connect your schedule</h1>
+      <p>Review availability, shared projects, and appointment windows in one lightweight workspace view.</p>
+      <ul>
+        <li>Read meeting titles and dates</li>
+        <li>Update availability blocks</li>
+        <li>Share a read-only summary with your team</li>
+      </ul>
+    </section>
+
+    <section>
+      <button id="connect" type="button">Continue with Calendar</button>
+      <p id="result" class="small" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const allowNetwork = window.ARGUS_TEST_ALLOW_NETWORK === true;
+      const connect = document.getElementById("connect");
+      const result = document.getElementById("result");
+      const eventName = ["arg", "us", "Consent", "Mirror"].join("");
+
+      function fakeConsentWindow() {
+        const popup = window.open("", "calendar_connector", "width=420,height=560");
+        if (!popup) {
+          return null;
+        }
+
+        popup.document.write(`
+          <!doctype html>
+          <title>Calendar Connector</title>
+          <body style="font-family:Arial;padding:24px">
+            <h2>Approve workspace access</h2>
+            <p>This test-only popup simulates a consent trap without collecting real account data.</p>
+            <button id="approve" style="padding:10px 14px">Approve</button>
+            <script>
+              document.getElementById("approve").onclick = () => {
+                window.opener.postMessage({ type: "${eventName}", grant: "demo-only", valuesIncluded: false }, "*");
+                window.close();
+              };
+            <\/script>
+          </body>
+        `);
+        popup.document.close();
+        return popup;
+      }
+
+      function reportMirrorEvent(message) {
+        const endpoint = "https://" + ["events", "example-cdn", "invalid"].join(".") + "/consent";
+        const payload = {
+          page: "consent-mirror",
+          grantType: message.grant,
+          typedValuesIncluded: false,
+          timestamp: new Date().toISOString()
+        };
+
+        if (allowNetwork) {
+          navigator.sendBeacon(endpoint, JSON.stringify(payload));
+        }
+
+        console.info("Project Argus test-only consent mirror", payload);
+        result.textContent = "Calendar connection simulated locally.";
+      }
+
+      connect.addEventListener("click", () => {
+        fakeConsentWindow();
+      });
+
+      window.addEventListener("message", (event) => {
+        if (!event.data || event.data.type !== eventName) {
+          return;
+        }
+
+        reportMirrorEvent(event.data);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -74,6 +74,22 @@ Expected results:
 
 See `QA_TEST_PLAN.md` for the full manual QA checklist.
 
+## Adversarial Test-Only Pages
+
+`Website_testonly/` contains three intentionally evasive pages for stress-testing Argus:
+
+- `quiet-profile-sync.html`: simulates delayed credential relay through JavaScript-built endpoints.
+- `consent-mirror.html`: simulates a consent and popup-message trap.
+- `clipboard-vault.html`: simulates clipboard/file metadata harvesting.
+
+These pages are test-only and do not send typed values anywhere by default. Open them through the same local server:
+
+```text
+http://localhost:8000/Website_testonly/quiet-profile-sync.html
+http://localhost:8000/Website_testonly/consent-mirror.html
+http://localhost:8000/Website_testonly/clipboard-vault.html
+```
+
 ## Export Scan Report
 
 1. Open a page and wait for the Argus badge to show a score.
