@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Gambling Data Leak</title>
+  <style>
+    body {
+      margin: 0;
+      background: #19080d;
+      color: #fff6f7;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 42px 20px;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+      border: 1px solid #ff4d5e;
+      border-radius: 8px;
+      background: rgba(255, 77, 94, 0.08);
+      padding: 18px;
+    }
+
+    input,
+    button {
+      border-radius: 6px;
+      border: 1px solid #5b2f39;
+      padding: 11px;
+    }
+
+    button {
+      background: #ff4d5e;
+      color: #fff;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Expected result: HIGH_RISK because gambling content is combined with cross-domain payment/deposit form behavior.</p>
+    <h1>Casino deposit center</h1>
+    <p>Jackpot, slot, casino, betting, deposit, withdrawal, member wallet.</p>
+
+    <form action="https://collector.example-submit.net/deposit" method="post">
+      <input type="hidden" name="campaign" value="demo">
+      <label>Member name <input name="member_login" autocomplete="username"></label>
+      <label>Deposit amount <input name="deposit_amount" placeholder="payment amount"></label>
+      <label>Bank account <input name="bank_account" placeholder="wallet or bank"></label>
+      <button type="submit">Deposit now</button>
+    </form>
+
+    <iframe src="https://tracker.example-submit.net/pixel.html" title="demo tracker" hidden></iframe>
+  </main>
+</body>
+</html>
