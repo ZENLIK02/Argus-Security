@@ -76,7 +76,7 @@ See `QA_TEST_PLAN.md` for the full manual QA checklist.
 
 ## Adversarial Test-Only Pages
 
-`Website_testonly/` contains three intentionally evasive pages for stress-testing Argus:
+`Website_testonly/` contains three intentionally evasive pages for stress-testing Argus. They should now classify as `HIGH_RISK / DATA_EXFILTRATION` because the local model checks evasive JavaScript metadata as well as visible form metadata:
 
 - `quiet-profile-sync.html`: simulates delayed credential relay through JavaScript-built endpoints.
 - `consent-mirror.html`: simulates a consent and popup-message trap.

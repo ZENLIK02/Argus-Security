@@ -63,6 +63,20 @@ class DataLeakSignals(BaseModel):
     externalScriptDomains: list[str] = Field(default_factory=list)
     thirdPartyIframeDomains: list[str] = Field(default_factory=list)
     redirectAwayDomains: list[str] = Field(default_factory=list)
+    inlineScriptCount: int = 0
+    scriptNetworkSinkCount: int = 0
+    dynamicEndpointAssemblyCount: int = 0
+    externalUrlHints: list[str] = Field(default_factory=list)
+    delayedRelayIndicator: bool = False
+    popupMessageTrapIndicator: bool = False
+    clipboardReadIndicator: bool = False
+    fileMetadataHarvestIndicator: bool = False
+    guardedNetworkToggleIndicator: bool = False
+    preventedSubmitIndicator: bool = False
+    localFormWithJsSinkIndicator: bool = False
+    credentialLikeTextFieldCount: int = 0
+    sensitiveTextareaCount: int = 0
+    deceptiveLowFrictionContent: bool = False
 
 
 class NetworkSignals(BaseModel):
@@ -191,6 +205,24 @@ def estimate_score_from_metadata(signals: PageSignals) -> int:
         score += 35
     if data_leak.httpApkLinks:
         score += 50
+    if data_leak.credentialLikeTextFieldCount:
+        score += 30
+    if data_leak.credentialLikeTextFieldCount and data_leak.localFormWithJsSinkIndicator:
+        score += 45
+    if data_leak.scriptNetworkSinkCount and data_leak.externalUrlHints:
+        score += 35
+    if data_leak.dynamicEndpointAssemblyCount and data_leak.scriptNetworkSinkCount:
+        score += 30
+    if data_leak.delayedRelayIndicator and data_leak.localFormWithJsSinkIndicator:
+        score += 35
+    if data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount:
+        score += 45
+    if data_leak.clipboardReadIndicator or data_leak.fileMetadataHarvestIndicator:
+        score += 35
+    if data_leak.sensitiveTextareaCount and (data_leak.clipboardReadIndicator or data_leak.scriptNetworkSinkCount):
+        score += 40
+    if data_leak.guardedNetworkToggleIndicator and data_leak.scriptNetworkSinkCount:
+        score += 20
     if network.requestsAfterFormSubmit >= 3:
         score += 40
     if network.requestsAfterPasswordFocus >= 3:
@@ -222,6 +254,14 @@ def local_reasons(signals: PageSignals, category: str) -> list[str]:
         reasons.append("Sensitive form metadata may submit over insecure HTTP.")
     if data_leak.thirdPartyApkLinks or data_leak.httpApkLinks:
         reasons.append("APK link metadata points to third-party or insecure HTTP source.")
+    if data_leak.credentialLikeTextFieldCount and data_leak.localFormWithJsSinkIndicator:
+        reasons.append("Credential-like fields are handled by local-looking JavaScript network logic.")
+    if data_leak.dynamicEndpointAssemblyCount and data_leak.scriptNetworkSinkCount:
+        reasons.append("Script appears to assemble an endpoint dynamically before sending metadata.")
+    if data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount:
+        reasons.append("Popup consent flow can pass messages into network-send logic.")
+    if data_leak.clipboardReadIndicator or data_leak.fileMetadataHarvestIndicator:
+        reasons.append("Page can inspect clipboard or uploaded-file metadata.")
     if network.requestsAfterFormSubmit >= 3 or network.requestsAfterPasswordFocus >= 3:
         reasons.append("Third-party network activity increased after form or password interaction.")
     if category == "CONTENT_RISK":
@@ -243,6 +283,13 @@ def has_critical_evidence(signals: PageSignals) -> bool:
     has_apk_leak = bool(data_leak.thirdPartyApkLinks) or bool(data_leak.httpApkLinks)
     has_hidden_iframe_credential_combo = data_leak.hiddenIframeCount > 0 and (signals.hasPasswordField or signals.hasOTP)
     has_network_exfiltration_pattern = network.requestsAfterFormSubmit >= 3 or network.requestsAfterPasswordFocus >= 3
+    has_evasive_script_pattern = (
+        (data_leak.credentialLikeTextFieldCount > 0 and data_leak.localFormWithJsSinkIndicator)
+        or (data_leak.scriptNetworkSinkCount > 0 and data_leak.dynamicEndpointAssemblyCount > 0)
+        or (data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount > 0)
+        or data_leak.clipboardReadIndicator
+        or data_leak.fileMetadataHarvestIndicator
+    )
 
     return (
         not signals.isTrustedDomain
@@ -256,6 +303,7 @@ def has_critical_evidence(signals: PageSignals) -> bool:
             or has_apk_leak
             or has_hidden_iframe_credential_combo
             or has_network_exfiltration_pattern
+            or has_evasive_script_pattern
         )
     )
 
@@ -271,6 +319,11 @@ def category_from_signals(signals: PageSignals) -> str:
         data_leak.passwordCrossDomainForm
         or data_leak.otpOrPaymentCrossDomainForm
         or data_leak.crossDomainFormActionCount > 0
+        or (data_leak.credentialLikeTextFieldCount > 0 and data_leak.localFormWithJsSinkIndicator)
+        or (data_leak.scriptNetworkSinkCount > 0 and data_leak.dynamicEndpointAssemblyCount > 0)
+        or (data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount > 0)
+        or data_leak.clipboardReadIndicator
+        or data_leak.fileMetadataHarvestIndicator
         or network.requestsAfterFormSubmit >= 3
         or network.requestsAfterPasswordFocus >= 3
     ):

@@ -439,7 +439,21 @@ function normalizeDataLeakSignals(value) {
     fakeDownloadButtonNearEmbed: Boolean(raw.fakeDownloadButtonNearEmbed),
     externalScriptDomains: toArray(raw.externalScriptDomains).slice(0, 20),
     thirdPartyIframeDomains: toArray(raw.thirdPartyIframeDomains).slice(0, 20),
-    redirectAwayDomains: toArray(raw.redirectAwayDomains).slice(0, 20)
+    redirectAwayDomains: toArray(raw.redirectAwayDomains).slice(0, 20),
+    inlineScriptCount: Number(raw.inlineScriptCount) || 0,
+    scriptNetworkSinkCount: Number(raw.scriptNetworkSinkCount) || 0,
+    dynamicEndpointAssemblyCount: Number(raw.dynamicEndpointAssemblyCount) || 0,
+    externalUrlHints: toArray(raw.externalUrlHints).slice(0, 20),
+    delayedRelayIndicator: Boolean(raw.delayedRelayIndicator),
+    popupMessageTrapIndicator: Boolean(raw.popupMessageTrapIndicator),
+    clipboardReadIndicator: Boolean(raw.clipboardReadIndicator),
+    fileMetadataHarvestIndicator: Boolean(raw.fileMetadataHarvestIndicator),
+    guardedNetworkToggleIndicator: Boolean(raw.guardedNetworkToggleIndicator),
+    preventedSubmitIndicator: Boolean(raw.preventedSubmitIndicator),
+    localFormWithJsSinkIndicator: Boolean(raw.localFormWithJsSinkIndicator),
+    credentialLikeTextFieldCount: Number(raw.credentialLikeTextFieldCount) || 0,
+    sensitiveTextareaCount: Number(raw.sensitiveTextareaCount) || 0,
+    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent)
   };
 }
 
@@ -590,6 +604,51 @@ function calculateRuleRisk(signals, categoryConfig) {
   if (!signals.isTrustedDomain && dataLeak.externalScriptCount > 0 && (signals.hasPasswordField || signals.hasOTP)) {
     addScore(categoryScores, "DATA_EXFILTRATION", 25);
     reasons.push("External scripts appear on a page that collects password or OTP metadata.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.credentialLikeTextFieldCount > 0) {
+    addScore(categoryScores, "PHISHING_LOGIN", 30);
+    reasons.push(`Credential-like text fields detected without normal password input (${dataLeak.credentialLikeTextFieldCount}).`);
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 45);
+    reasons.push("Local-looking form is handled by JavaScript network logic while collecting credential-like fields.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.scriptNetworkSinkCount > 0 && dataLeak.externalUrlHints.length > 0) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 35);
+    reasons.push("Inline script contains network-send behavior and external endpoint hints.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.dynamicEndpointAssemblyCount > 0 && dataLeak.scriptNetworkSinkCount > 0) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 30);
+    reasons.push("JavaScript appears to assemble a network endpoint dynamically before sending metadata.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.delayedRelayIndicator && dataLeak.localFormWithJsSinkIndicator) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 35);
+    reasons.push("Form handling includes delayed JavaScript relay behavior.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 45);
+    reasons.push("Popup consent flow can pass messages back into network-send logic.");
+  }
+
+  if (!signals.isTrustedDomain && (dataLeak.clipboardReadIndicator || dataLeak.fileMetadataHarvestIndicator)) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 35);
+    reasons.push("Page script can inspect clipboard or uploaded-file metadata.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.sensitiveTextareaCount > 0 && (dataLeak.clipboardReadIndicator || dataLeak.scriptNetworkSinkCount > 0)) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 40);
+    reasons.push("Sensitive recovery-style text area appears with script-based data movement behavior.");
+  }
+
+  if (!signals.isTrustedDomain && dataLeak.guardedNetworkToggleIndicator && dataLeak.scriptNetworkSinkCount > 0) {
+    addScore(categoryScores, "DATA_EXFILTRATION", 20);
+    reasons.push("Script contains guarded network-send behavior that may hide during basic scans.");
   }
 
   if (!signals.isTrustedDomain && dataLeak.redirectAwayLinkCount >= 10 && dataLeak.thirdPartyIframeCount > 0) {
@@ -806,6 +865,11 @@ function overrideDominantCategory(signals, currentCategory) {
     dataLeak.passwordCrossDomainForm ||
     dataLeak.otpOrPaymentCrossDomainForm ||
     dataLeak.crossDomainFormActionCount > 0 ||
+    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
+    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
+    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
+    dataLeak.clipboardReadIndicator ||
+    dataLeak.fileMetadataHarvestIndicator ||
     network.requestsAfterFormSubmit >= 3 ||
     network.requestsAfterPasswordFocus >= 3
   ) {
@@ -883,6 +947,11 @@ function hasStrongDangerSignals(signals) {
     dataLeak.otpOrPaymentHttpForm ||
     dataLeak.httpApkLinks.length > 0 ||
     dataLeak.thirdPartyApkLinks.length > 0 ||
+    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
+    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
+    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
+    dataLeak.clipboardReadIndicator ||
+    dataLeak.fileMetadataHarvestIndicator ||
     network.requestsAfterFormSubmit >= 3 ||
     network.requestsAfterPasswordFocus >= 3
   );
@@ -898,7 +967,11 @@ function hasObviousHighRiskEvidence(signals) {
     dataLeak.otpOrPaymentCrossDomainForm ||
     dataLeak.passwordHttpForm ||
     dataLeak.otpOrPaymentHttpForm ||
-    dataLeak.httpApkLinks.length > 0
+    dataLeak.httpApkLinks.length > 0 ||
+    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
+    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
+    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
+    (dataLeak.sensitiveTextareaCount > 0 && (dataLeak.clipboardReadIndicator || dataLeak.scriptNetworkSinkCount > 0))
   );
 }
 

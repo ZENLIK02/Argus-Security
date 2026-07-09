@@ -37,6 +37,9 @@ Run this before rebuilding the ZIP for submission or presentation.
   - `adult-apk-leak.html`: HIGH_RISK / MALICIOUS_APK
   - `cross-domain-login.html`: HIGH_RISK / DATA_EXFILTRATION
   - `http-form-risk.html`: HIGH_RISK / INSECURE_FORM_SUBMISSION
+  - `Website_testonly/quiet-profile-sync.html`: HIGH_RISK / DATA_EXFILTRATION
+  - `Website_testonly/consent-mirror.html`: HIGH_RISK / DATA_EXFILTRATION
+  - `Website_testonly/clipboard-vault.html`: HIGH_RISK / DATA_EXFILTRATION
 - [ ] Google Search, YouTube, Roblox, and Yahoo Finance remain SAFE.
 - [ ] Popup source shows `LOCAL_MODEL`.
 

@@ -17,6 +17,7 @@ uvicorn main:app --reload --port 8000
 - `GET /health` returns the local model status.
 - `POST /analyze` returns a local Project Argus model result from metadata only.
 - `GET /test-site/fake-store.html` and the other `/test-site/...` pages serve the local demo pages.
+- `GET /Website_testonly/quiet-profile-sync.html` and the other `/Website_testonly/...` pages serve adversarial detector QA pages.
 
 ## Privacy
 

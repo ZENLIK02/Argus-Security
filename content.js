@@ -164,6 +164,13 @@
     ].filter(Boolean).join(" "));
   }
 
+  function getScriptSurface(script) {
+    return normalizeText([
+      script.src,
+      script.textContent
+    ].filter(Boolean).join(" ").slice(0, 12000));
+  }
+
   function collectKeywordMatches(surface, keywords) {
     return unique(keywords.filter((keyword) => surface.includes(keyword)));
   }
@@ -312,6 +319,7 @@
     let otpOrPaymentCrossDomainForm = false;
     let passwordHttpForm = false;
     let otpOrPaymentHttpForm = false;
+    const evasiveBehaviorSignals = extractEvasiveBehaviorSignals(forms, links, buttons, iframes, scripts, currentDomain);
 
     forms.forEach((form) => {
       const rawAction = (form.getAttribute("action") || "").trim();
@@ -401,8 +409,92 @@
       fakeDownloadButtonNearEmbed: fakeDownloadButtons.length > 0 && (iframes.length > 0 || externalScripts.length > 0),
       externalScriptDomains: unique(externalScripts.map((meta) => meta.hostname)).slice(0, 20),
       thirdPartyIframeDomains: unique(thirdPartyIframes.map((meta) => meta.hostname)).slice(0, 20),
-      redirectAwayDomains: unique(redirectAwayLinks.map((meta) => meta.hostname)).slice(0, 20)
+      redirectAwayDomains: unique(redirectAwayLinks.map((meta) => meta.hostname)).slice(0, 20),
+      ...evasiveBehaviorSignals
     };
+  }
+
+  function extractEvasiveBehaviorSignals(forms, links, buttons, iframes, scripts, currentDomain) {
+    const inputs = Array.from(document.querySelectorAll("input, textarea"));
+    const scriptSurfaces = scripts.map(getScriptSurface);
+    const combinedScriptSurface = scriptSurfaces.join(" ");
+    const inlineScripts = scripts.filter((script) => !script.src && normalizeText(script.textContent).length > 20);
+    const externalUrlHints = extractExternalUrlHints(combinedScriptSurface, currentDomain);
+    const jsNetworkSinkCount = countPattern(combinedScriptSurface, /\b(fetch|sendbeacon|xmlhttprequest)\b|new\s+image|\.src\s*=|navigator\.sendbeacon/gi);
+    const dynamicEndpointAssemblyCount = countPattern(combinedScriptSurface, /fromcharcode|endpointparts|\.join\s*\(|encodeuricomponent|json\.stringify|btoa\s*\(|atob\s*\(|charcodeat|\\x[0-9a-f]{2}|\\u[0-9a-f]{4}/gi);
+    const delayedRelayIndicator = /settimeout|requestidlecallback|setinterval/.test(combinedScriptSurface) && jsNetworkSinkCount > 0;
+    const popupMessageTrapIndicator = /window\.open|postmessage|window\.opener|addeventlistener\s*\(\s*["']message/.test(combinedScriptSurface);
+    const clipboardReadIndicator = /navigator\.clipboard|readtext\s*\(/.test(combinedScriptSurface);
+    const fileMetadataHarvestIndicator = /files\s*\)|\.files|file\.name|file\.size|file\.type/.test(combinedScriptSurface) && inputs.some((input) => normalizeText(input.type) === "file");
+    const guardedNetworkToggleIndicator = /allownetwork|argus_test_allow_network|typedvaluesincluded|valueincluded|valuesincluded/.test(combinedScriptSurface);
+    const preventedSubmitIndicator = /preventdefault\s*\(/.test(combinedScriptSurface) && forms.length > 0;
+    const localFormWithJsSinkIndicator = forms.some((form) => {
+      const actionMeta = getUrlMetadata(form.getAttribute("action") || "");
+      const isLocalAction = !actionMeta.hostname || isSameSiteDomain(currentDomain, actionMeta.hostname);
+      return isLocalAction && (preventedSubmitIndicator || jsNetworkSinkCount > 0);
+    });
+    const credentialLikeTextFieldCount = inputs.filter((input) => {
+      const type = normalizeText(input.type || input.tagName);
+      const surface = getInputSurface(input);
+      return (
+        type !== "password" &&
+        /password|passcode|passwd|secret|recovery|seed|phrase|access phrase|current-password|one-time-code|otp|token|device[_\s-]?check|verification|code|pin/.test(surface)
+      );
+    }).length;
+    const sensitiveTextareaCount = inputs.filter((input) => {
+      const surface = getInputSurface(input);
+      return input.tagName === "TEXTAREA" && /recovery|seed|phrase|secret|vault|backup|token|key|note/.test(surface);
+    }).length;
+    const deceptiveLowFrictionContent = /sync|connect|calendar|vault|recovery|workspace|profile|consent|approve|continue/.test(normalizeText([
+      document.title,
+      getLimitedPageTextSurface(),
+      buttons.map(getElementText).join(" ")
+    ].join(" ")));
+
+    return {
+      inlineScriptCount: inlineScripts.length,
+      scriptNetworkSinkCount: jsNetworkSinkCount,
+      dynamicEndpointAssemblyCount,
+      externalUrlHints,
+      delayedRelayIndicator,
+      popupMessageTrapIndicator,
+      clipboardReadIndicator,
+      fileMetadataHarvestIndicator,
+      guardedNetworkToggleIndicator,
+      preventedSubmitIndicator,
+      localFormWithJsSinkIndicator,
+      credentialLikeTextFieldCount,
+      sensitiveTextareaCount,
+      deceptiveLowFrictionContent
+    };
+  }
+
+  function extractExternalUrlHints(surface, currentDomain) {
+    const hints = [];
+    const directUrlPattern = /https?:\/\/[a-z0-9.-]+(?:\/[a-z0-9._~:/?#[\]@!$&'()*+,;=-]*)?/gi;
+    const domainLikePattern = /\b[a-z0-9-]+\.(?:invalid|com|net|org|io|app|site|xyz|top|click|shop|info)\b/gi;
+    const matches = `${surface}`.match(directUrlPattern) || [];
+    matches.forEach((value) => {
+      const meta = getUrlMetadata(value);
+      if (meta.hostname && !isSameSiteDomain(currentDomain, meta.hostname)) {
+        hints.push(meta.sanitizedUrl);
+      }
+    });
+
+    const domainMatches = `${surface}`.match(domainLikePattern) || [];
+    domainMatches.forEach((value) => {
+      const hostname = value.toLowerCase();
+      if (hostname && !isSameSiteDomain(currentDomain, hostname)) {
+        hints.push(hostname);
+      }
+    });
+
+    return unique(hints).slice(0, 20);
+  }
+
+  function countPattern(value, pattern) {
+    const matches = String(value || "").match(pattern);
+    return matches ? matches.length : 0;
   }
 
   function scanPage() {
@@ -417,7 +509,7 @@
     const metas = Array.from(document.querySelectorAll("meta[name], meta[property]"));
     const forms = Array.from(document.querySelectorAll("form"));
     const iframes = Array.from(document.querySelectorAll("iframe"));
-    const scripts = Array.from(document.querySelectorAll("script[src]"));
+    const scripts = Array.from(document.querySelectorAll("script"));
 
     const buttonTexts = unique(buttons.map((button) => truncate(getElementText(button), 80))).slice(0, 50);
     const anchorHrefs = unique(links.map((link) => sanitizeUrl(link.href))).slice(0, 80);

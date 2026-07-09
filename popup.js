@@ -162,6 +162,10 @@ function renderDataLeakGuard(scan) {
     ["Third-party XHR/fetch", network.thirdPartyXHRRequests],
     ["After form submit", network.requestsAfterFormSubmit],
     ["After password focus", network.requestsAfterPasswordFocus],
+    ["Credential-like fields", dataLeak.credentialLikeTextFieldCount],
+    ["Script network sinks", dataLeak.scriptNetworkSinkCount],
+    ["Dynamic endpoints", dataLeak.dynamicEndpointAssemblyCount],
+    ["Clipboard/file signals", Number(Boolean(dataLeak.clipboardReadIndicator)) + Number(Boolean(dataLeak.fileMetadataHarvestIndicator))],
     ["HTTP APK links", Array.isArray(dataLeak.httpApkLinks) ? dataLeak.httpApkLinks.length : 0],
     ["Third-party APK links", Array.isArray(dataLeak.thirdPartyApkLinks) ? dataLeak.thirdPartyApkLinks.length : 0]
   ];
@@ -198,7 +202,21 @@ function sanitizeDataLeakSignals(signals) {
     thirdPartyIframeCount: Number(raw.thirdPartyIframeCount) || 0,
     redirectAwayLinkCount: Number(raw.redirectAwayLinkCount) || 0,
     thirdPartyApkLinks: Array.isArray(raw.thirdPartyApkLinks) ? raw.thirdPartyApkLinks.slice(0, 10) : [],
-    httpApkLinks: Array.isArray(raw.httpApkLinks) ? raw.httpApkLinks.slice(0, 10) : []
+    httpApkLinks: Array.isArray(raw.httpApkLinks) ? raw.httpApkLinks.slice(0, 10) : [],
+    inlineScriptCount: Number(raw.inlineScriptCount) || 0,
+    scriptNetworkSinkCount: Number(raw.scriptNetworkSinkCount) || 0,
+    dynamicEndpointAssemblyCount: Number(raw.dynamicEndpointAssemblyCount) || 0,
+    externalUrlHints: Array.isArray(raw.externalUrlHints) ? raw.externalUrlHints.slice(0, 10) : [],
+    delayedRelayIndicator: Boolean(raw.delayedRelayIndicator),
+    popupMessageTrapIndicator: Boolean(raw.popupMessageTrapIndicator),
+    clipboardReadIndicator: Boolean(raw.clipboardReadIndicator),
+    fileMetadataHarvestIndicator: Boolean(raw.fileMetadataHarvestIndicator),
+    guardedNetworkToggleIndicator: Boolean(raw.guardedNetworkToggleIndicator),
+    preventedSubmitIndicator: Boolean(raw.preventedSubmitIndicator),
+    localFormWithJsSinkIndicator: Boolean(raw.localFormWithJsSinkIndicator),
+    credentialLikeTextFieldCount: Number(raw.credentialLikeTextFieldCount) || 0,
+    sensitiveTextareaCount: Number(raw.sensitiveTextareaCount) || 0,
+    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent)
   };
 }
 

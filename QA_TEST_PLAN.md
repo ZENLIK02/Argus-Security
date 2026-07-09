@@ -44,9 +44,9 @@ These pages are intentionally designed to be hard for Argus to catch. They shoul
 
 | Test | URL / Page | Expected | Checks |
 | --- | --- | --- | --- |
-| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | Hard evasive simulation | Uses text fields, delayed JavaScript-built endpoint, no direct external form action, no typed value exfiltration |
-| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | Hard evasive simulation | Uses popup/postMessage consent pattern, no password field, no direct form submit |
-| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | Hard evasive simulation | Uses clipboard/file metadata pattern, guarded network behavior, no typed value exfiltration |
+| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | HIGH_RISK / DATA_EXFILTRATION | Uses credential-like text fields, delayed JavaScript-built endpoint, local-looking form action, no typed value exfiltration |
+| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | HIGH_RISK / DATA_EXFILTRATION | Uses popup/postMessage consent pattern and script network-send logic |
+| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | HIGH_RISK / DATA_EXFILTRATION | Uses clipboard/file metadata pattern, dynamic endpoint assembly, guarded network behavior, no typed value exfiltration |
 
 ## Export Report Test
 
