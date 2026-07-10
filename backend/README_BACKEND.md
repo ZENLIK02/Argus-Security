@@ -18,6 +18,7 @@ uvicorn main:app --reload --port 8000
 - `POST /analyze` returns a local Project Argus model result from metadata only.
 - `GET /test-site/fake-store.html` and the other `/test-site/...` pages serve the local demo pages.
 - `GET /Website_testonly/quiet-profile-sync.html` and the other `/Website_testonly/...` pages serve adversarial detector QA pages.
+- `POST /demo-collect` accepts the fixed dummy payload from `network-plaintext-demo.html`, reports byte count, and discards the body without storage.
 
 ## Privacy
 

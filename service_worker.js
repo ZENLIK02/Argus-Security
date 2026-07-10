@@ -15,6 +15,14 @@ const FORM_SUBMITTED_MESSAGE = "ARGUS_FORM_SUBMITTED";
 const DOWNLOAD_CLICKED_MESSAGE = "ARGUS_DOWNLOAD_CLICKED";
 const SETTINGS_KEY = "argusSettings";
 const TEMPORAL_WINDOW_MS = 30000;
+const SENSITIVE_REQUEST_WINDOW_MS = 15000;
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const MULTI_LABEL_SUFFIXES = new Set([
+  "co.th", "or.th", "go.th", "ac.th", "in.th",
+  "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "org.au",
+  "co.jp", "co.kr", "com.sg", "com.my", "co.nz",
+  "github.io", "pages.dev", "vercel.app", "netlify.app", "appspot.com", "cloudfront.net"
+]);
 
 const CONTENT_RISK_MIN_SCORE = 35;
 
@@ -37,6 +45,7 @@ let riskyCategoriesCache = null;
 let detectionPolicyCache = null;
 const tabNetworkSignals = new Map();
 const tabPageDomains = new Map();
+const tabRescanTimers = new Map();
 
 initializeNetworkMonitoring();
 
@@ -97,6 +106,9 @@ function initializeNetworkMonitoring() {
     chrome.tabs.onRemoved.addListener((tabId) => {
       tabNetworkSignals.delete(tabId);
       tabPageDomains.delete(tabId);
+      const timer = tabRescanTimers.get(tabId);
+      if (timer) clearTimeout(timer);
+      tabRescanTimers.delete(tabId);
     });
   }
 
@@ -123,9 +135,14 @@ function recordNetworkRequest(details) {
   const tabDomain = tabPageDomains.get(details.tabId) || getInitiatorDomain(details.initiator || details.documentUrl || "");
   const initiatorDomain = getInitiatorDomain(details.initiator || details.documentUrl || "");
   const referenceDomain = tabDomain || initiatorDomain;
-  const isThirdParty = referenceDomain ? !isDomainMatch(requestMeta.hostname, referenceDomain) : false;
+  const isThirdParty = referenceDomain ? !isSameSiteDomain(requestMeta.hostname, referenceDomain) : false;
   const signals = getNetworkSignals(details.tabId);
   const now = Date.now();
+  const method = String(details.method || "GET").toUpperCase();
+  const isWriteRequest = WRITE_METHODS.has(method);
+  const afterFormSubmit = Boolean(signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < SENSITIVE_REQUEST_WINDOW_MS);
+  const afterSensitiveFocus = Boolean(signals.lastPasswordFocusAt && now - signals.lastPasswordFocusAt < SENSITIVE_REQUEST_WINDOW_MS);
+  const followsSensitiveInteraction = (afterFormSubmit && signals.lastFormWasSensitive) || afterSensitiveFocus;
 
   signals.totalRequests += 1;
   if (isThirdParty) {
@@ -133,6 +150,11 @@ function recordNetworkRequest(details) {
   }
   if (requestMeta.protocol === "http:") {
     signals.insecureHttpRequests += 1;
+  }
+  if (isWriteRequest) {
+    signals.writeRequests += 1;
+    if (isThirdParty) signals.thirdPartyWriteRequests += 1;
+    if (requestMeta.protocol === "http:") signals.insecureWriteRequests += 1;
   }
 
   if (isThirdParty && details.type === "script") {
@@ -144,13 +166,40 @@ function recordNetworkRequest(details) {
   if (isThirdParty && ["xmlhttprequest", "fetch", "beacon", "ping"].includes(details.type)) {
     signals.thirdPartyXHRRequests += 1;
   }
-  if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < 15000 && isThirdParty) {
+  if (afterFormSubmit && isThirdParty) {
     signals.requestsAfterFormSubmit += 1;
     addTimelineEvent(signals, "THIRD_PARTY_AFTER_FORM", now);
   }
-  if (signals.lastPasswordFocusAt && now - signals.lastPasswordFocusAt < 15000 && isThirdParty) {
+  if (afterSensitiveFocus && isThirdParty) {
     signals.requestsAfterPasswordFocus += 1;
     addTimelineEvent(signals, "THIRD_PARTY_AFTER_PASSWORD", now);
+  }
+  if (afterFormSubmit && isWriteRequest) {
+    signals.writeRequestsAfterFormSubmit += 1;
+    if (requestMeta.protocol === "http:") signals.insecureWriteRequestsAfterFormSubmit += 1;
+    if (isThirdParty) signals.thirdPartyWriteRequestsAfterFormSubmit += 1;
+    addTimelineEvent(signals, "WRITE_AFTER_FORM", now);
+
+    if (signals.lastFormWasSensitive) {
+      signals.sensitiveWriteRequestsAfterFormSubmit += 1;
+      if (requestMeta.protocol === "http:") {
+        signals.insecureSensitiveWriteRequests += 1;
+        addTimelineEvent(signals, "UNENCRYPTED_SENSITIVE_WRITE", now);
+      }
+      if (isThirdParty) {
+        signals.crossDomainSensitiveWriteRequests += 1;
+        addTimelineEvent(signals, "CROSS_DOMAIN_SENSITIVE_WRITE", now);
+      }
+    }
+  }
+  if (["beacon", "ping"].includes(details.type) && followsSensitiveInteraction) {
+    signals.beaconOrPingAfterSensitiveInput += 1;
+    addTimelineEvent(signals, "BEACON_AFTER_SENSITIVE_INPUT", now);
+  }
+  if (details.type === "image" && method === "GET" && requestMeta.hasQuery && isThirdParty &&
+    afterFormSubmit && signals.lastFormWasSensitive) {
+    signals.queryBearingGetAfterSensitiveForm += 1;
+    addTimelineEvent(signals, "QUERY_GET_AFTER_SENSITIVE_FORM", now);
   }
   if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < TEMPORAL_WINDOW_MS && isThirdParty && details.type === "main_frame") {
     signals.formSubmitThenCrossDomainRedirectCount += 1;
@@ -162,11 +211,17 @@ function recordNetworkRequest(details) {
 
   signals.updatedAt = now;
   tabNetworkSignals.set(details.tabId, signals);
+
+  if ((afterFormSubmit && isWriteRequest) ||
+    (["beacon", "ping"].includes(details.type) && followsSensitiveInteraction) ||
+    (details.type === "image" && method === "GET" && requestMeta.hasQuery && isThirdParty && afterFormSubmit && signals.lastFormWasSensitive)) {
+    schedulePageRescan(details.tabId, 300);
+  }
 }
 
 function recordPageEvent(type, payload, sender) {
   const tabId = sender && sender.tab ? sender.tab.id : null;
-  if (!tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) {
     return;
   }
 
@@ -174,11 +229,17 @@ function recordPageEvent(type, payload, sender) {
   const now = Date.now();
   if (type === PASSWORD_FOCUS_MESSAGE) {
     signals.lastPasswordFocusAt = now;
+    signals.lastSensitiveKind = String(payload && payload.sensitiveKind || "sensitive").slice(0, 40);
     addTimelineEvent(signals, "PASSWORD_FOCUS", now);
   }
   if (type === FORM_SUBMITTED_MESSAGE) {
     signals.lastFormSubmitAt = now;
+    signals.lastFormWasSensitive = Boolean(payload && payload.hasSensitiveFields);
+    signals.lastFormActionProtocol = String(payload && payload.actionProtocol || "").slice(0, 12);
+    signals.lastFormCrossDomain = Boolean(payload && payload.isCrossDomainAction);
+    signals.lastFormMethod = String(payload && payload.formMethod || "GET").slice(0, 12);
     addTimelineEvent(signals, "FORM_SUBMIT", now);
+    if (signals.lastFormWasSensitive) addTimelineEvent(signals, "SENSITIVE_FORM_SUBMIT", now);
   }
   if (type === DOWNLOAD_CLICKED_MESSAGE) {
     signals.downloadClickCount += 1;
@@ -189,6 +250,21 @@ function recordPageEvent(type, payload, sender) {
   }
   signals.updatedAt = now;
   tabNetworkSignals.set(tabId, signals);
+  schedulePageRescan(tabId, type === FORM_SUBMITTED_MESSAGE ? 700 : 350);
+}
+
+function schedulePageRescan(tabId, delayMs) {
+  const existing = tabRescanTimers.get(tabId);
+  if (existing) clearTimeout(existing);
+
+  const timer = setTimeout(() => {
+    tabRescanTimers.delete(tabId);
+    chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE }, () => {
+      chrome.runtime.lastError;
+    });
+  }, Math.max(100, Number(delayMs) || 300));
+
+  tabRescanTimers.set(tabId, timer);
 }
 
 function getNetworkSignals(tabId) {
@@ -204,15 +280,31 @@ function getNetworkSignals(tabId) {
     thirdPartyFrameRequests: 0,
     thirdPartyXHRRequests: 0,
     insecureHttpRequests: 0,
+    writeRequests: 0,
+    thirdPartyWriteRequests: 0,
+    insecureWriteRequests: 0,
     suspiciousRequestDomains: [],
     requestsAfterFormSubmit: 0,
     requestsAfterPasswordFocus: 0,
+    writeRequestsAfterFormSubmit: 0,
+    insecureWriteRequestsAfterFormSubmit: 0,
+    thirdPartyWriteRequestsAfterFormSubmit: 0,
+    sensitiveWriteRequestsAfterFormSubmit: 0,
+    insecureSensitiveWriteRequests: 0,
+    crossDomainSensitiveWriteRequests: 0,
+    beaconOrPingAfterSensitiveInput: 0,
+    queryBearingGetAfterSensitiveForm: 0,
     downloadClickCount: 0,
     formSubmitThenCrossDomainRedirectCount: 0,
     downloadAfterFormSubmitCount: 0,
     recentEvents: [],
     lastFormSubmitAt: 0,
     lastPasswordFocusAt: 0,
+    lastFormWasSensitive: false,
+    lastFormActionProtocol: "",
+    lastFormCrossDomain: false,
+    lastFormMethod: "GET",
+    lastSensitiveKind: "",
     updatedAt: Date.now()
   };
 }
@@ -226,14 +318,28 @@ function exportNetworkSignals(tabId) {
     thirdPartyFrameRequests: signals.thirdPartyFrameRequests,
     thirdPartyXHRRequests: signals.thirdPartyXHRRequests,
     insecureHttpRequests: signals.insecureHttpRequests,
+    writeRequests: signals.writeRequests,
+    thirdPartyWriteRequests: signals.thirdPartyWriteRequests,
+    insecureWriteRequests: signals.insecureWriteRequests,
     requestsAfterFormSubmit: signals.requestsAfterFormSubmit,
     requestsAfterPasswordFocus: signals.requestsAfterPasswordFocus,
+    writeRequestsAfterFormSubmit: signals.writeRequestsAfterFormSubmit,
+    insecureWriteRequestsAfterFormSubmit: signals.insecureWriteRequestsAfterFormSubmit,
+    thirdPartyWriteRequestsAfterFormSubmit: signals.thirdPartyWriteRequestsAfterFormSubmit,
+    sensitiveWriteRequestsAfterFormSubmit: signals.sensitiveWriteRequestsAfterFormSubmit,
+    insecureSensitiveWriteRequests: signals.insecureSensitiveWriteRequests,
+    crossDomainSensitiveWriteRequests: signals.crossDomainSensitiveWriteRequests,
+    beaconOrPingAfterSensitiveInput: signals.beaconOrPingAfterSensitiveInput,
+    queryBearingGetAfterSensitiveForm: signals.queryBearingGetAfterSensitiveForm,
     suspiciousRequestDomains: signals.suspiciousRequestDomains.slice(0, 30),
     temporalSignals: {
       formSubmitThenThirdPartyCount: signals.requestsAfterFormSubmit,
       passwordFocusThenThirdPartyCount: signals.requestsAfterPasswordFocus,
       formSubmitThenCrossDomainRedirectCount: signals.formSubmitThenCrossDomainRedirectCount,
       downloadAfterFormSubmitCount: signals.downloadAfterFormSubmitCount,
+      unencryptedSensitiveWriteCount: signals.insecureSensitiveWriteRequests,
+      crossDomainSensitiveWriteCount: signals.crossDomainSensitiveWriteRequests,
+      beaconAfterSensitiveInputCount: signals.beaconOrPingAfterSensitiveInput,
       recentEventTypes: signals.recentEvents
         .filter((event) => Date.now() - event.at <= TEMPORAL_WINDOW_MS)
         .map((event) => event.type)
@@ -270,6 +376,9 @@ function preserveOrClearTemporalState(tabId) {
   signals.thirdPartyFrameRequests = 0;
   signals.thirdPartyXHRRequests = 0;
   signals.insecureHttpRequests = 0;
+  signals.writeRequests = 0;
+  signals.thirdPartyWriteRequests = 0;
+  signals.insecureWriteRequests = 0;
   signals.suspiciousRequestDomains = [];
   signals.updatedAt = now;
   tabNetworkSignals.set(tabId, signals);
@@ -282,7 +391,7 @@ async function handlePageScan(pageData, sender) {
   const riskyCategories = await loadRiskyCategories();
   const detectionPolicy = await loadDetectionPolicy();
   const signals = normalizeSignals(pageData, trustedDomains);
-  if (tabId) {
+  if (Number.isInteger(tabId) && tabId >= 0) {
     tabPageDomains.set(tabId, signals.domain);
     signals.networkSignals = exportNetworkSignals(tabId);
   }
@@ -291,8 +400,8 @@ async function handlePageScan(pageData, sender) {
     mode: "LOCAL_MODEL",
     externalAi: false,
     engine: "ARGUS_EVIDENCE_ENGINE",
-    policyVersion: detectionPolicy.version || "2.0.0",
-    message: "Project Argus modular evidence engine active."
+    policyVersion: detectionPolicy.version || "3.0.0",
+    message: "Project Argus data-flow priority engine active."
   };
 
   const finalRisk = {
@@ -337,7 +446,7 @@ async function handlePageScan(pageData, sender) {
 
   await saveScanResult(scanResult);
 
-  if (tabId && shouldWarn) {
+  if (Number.isInteger(tabId) && tabId >= 0 && shouldWarn) {
     chrome.tabs.sendMessage(tabId, {
       type: WARNING_MESSAGE,
       payload: {
@@ -464,6 +573,7 @@ function normalizeSignals(data, trustedDomains) {
     url,
     domain,
     pathname,
+    pageProtocol: String(pageData.pageProtocol || parseUrlMetadata(url).protocol || ""),
     isTrustedDomain: isTrusted,
     isSearchEnginePage: isSearchEngine,
     passwordFieldCount: Number(pageData.passwordFieldCount) || 0,
@@ -503,6 +613,7 @@ function normalizeDataLeakSignals(value) {
   const raw = value && typeof value === "object" ? value : {};
   return {
     formCount: Number(raw.formCount) || 0,
+    sensitiveFormCount: Number(raw.sensitiveFormCount) || 0,
     formActionUrls: toArray(raw.formActionUrls).slice(0, 30),
     emptyFormActionCount: Number(raw.emptyFormActionCount) || 0,
     httpFormActionCount: Number(raw.httpFormActionCount) || 0,
@@ -511,6 +622,8 @@ function normalizeDataLeakSignals(value) {
     otpOrPaymentCrossDomainForm: Boolean(raw.otpOrPaymentCrossDomainForm),
     passwordHttpForm: Boolean(raw.passwordHttpForm),
     otpOrPaymentHttpForm: Boolean(raw.otpOrPaymentHttpForm),
+    sameOriginSensitiveHttpForm: Boolean(raw.sameOriginSensitiveHttpForm),
+    httpPageWithSensitiveForm: Boolean(raw.httpPageWithSensitiveForm),
     hiddenInputCount: Number(raw.hiddenInputCount) || 0,
     hiddenIframeCount: Number(raw.hiddenIframeCount) || 0,
     externalScriptCount: Number(raw.externalScriptCount) || 0,
@@ -548,9 +661,35 @@ function normalizeNetworkSignals(value) {
     thirdPartyFrameRequests: Number(raw.thirdPartyFrameRequests) || 0,
     thirdPartyXHRRequests: Number(raw.thirdPartyXHRRequests) || 0,
     insecureHttpRequests: Number(raw.insecureHttpRequests) || 0,
+    writeRequests: Number(raw.writeRequests) || 0,
+    thirdPartyWriteRequests: Number(raw.thirdPartyWriteRequests) || 0,
+    insecureWriteRequests: Number(raw.insecureWriteRequests) || 0,
     requestsAfterFormSubmit: Number(raw.requestsAfterFormSubmit) || 0,
     requestsAfterPasswordFocus: Number(raw.requestsAfterPasswordFocus) || 0,
-    suspiciousRequestDomains: toArray(raw.suspiciousRequestDomains).slice(0, 30)
+    writeRequestsAfterFormSubmit: Number(raw.writeRequestsAfterFormSubmit) || 0,
+    insecureWriteRequestsAfterFormSubmit: Number(raw.insecureWriteRequestsAfterFormSubmit) || 0,
+    thirdPartyWriteRequestsAfterFormSubmit: Number(raw.thirdPartyWriteRequestsAfterFormSubmit) || 0,
+    sensitiveWriteRequestsAfterFormSubmit: Number(raw.sensitiveWriteRequestsAfterFormSubmit) || 0,
+    insecureSensitiveWriteRequests: Number(raw.insecureSensitiveWriteRequests) || 0,
+    crossDomainSensitiveWriteRequests: Number(raw.crossDomainSensitiveWriteRequests) || 0,
+    beaconOrPingAfterSensitiveInput: Number(raw.beaconOrPingAfterSensitiveInput) || 0,
+    queryBearingGetAfterSensitiveForm: Number(raw.queryBearingGetAfterSensitiveForm) || 0,
+    suspiciousRequestDomains: toArray(raw.suspiciousRequestDomains).slice(0, 30),
+    temporalSignals: normalizeTemporalSignals(raw.temporalSignals)
+  };
+}
+
+function normalizeTemporalSignals(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    formSubmitThenThirdPartyCount: Number(raw.formSubmitThenThirdPartyCount) || 0,
+    passwordFocusThenThirdPartyCount: Number(raw.passwordFocusThenThirdPartyCount) || 0,
+    formSubmitThenCrossDomainRedirectCount: Number(raw.formSubmitThenCrossDomainRedirectCount) || 0,
+    downloadAfterFormSubmitCount: Number(raw.downloadAfterFormSubmitCount) || 0,
+    unencryptedSensitiveWriteCount: Number(raw.unencryptedSensitiveWriteCount) || 0,
+    crossDomainSensitiveWriteCount: Number(raw.crossDomainSensitiveWriteCount) || 0,
+    beaconAfterSensitiveInputCount: Number(raw.beaconAfterSensitiveInputCount) || 0,
+    recentEventTypes: toArray(raw.recentEventTypes).slice(-20)
   };
 }
 
@@ -1088,6 +1227,24 @@ function isDomainMatch(domain, expectedDomain) {
   return domain === expectedDomain || domain.endsWith(`.${expectedDomain}`);
 }
 
+function isSameSiteDomain(domain, otherDomain) {
+  if (!domain || !otherDomain) return false;
+  if (domain === otherDomain || domain.endsWith(`.${otherDomain}`) || otherDomain.endsWith(`.${domain}`)) return true;
+  return getSiteDomain(domain) === getSiteDomain(otherDomain);
+}
+
+function getSiteDomain(domain) {
+  const hostname = String(domain || "").toLowerCase().replace(/^\.+|\.+$/g, "");
+  if (!hostname || hostname === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) {
+    return hostname;
+  }
+
+  const labels = hostname.split(".");
+  if (labels.length <= 2) return hostname;
+  const suffix = labels.slice(-2).join(".");
+  return MULTI_LABEL_SUFFIXES.has(suffix) ? labels.slice(-3).join(".") : suffix;
+}
+
 function parseUrlMetadata(value) {
   try {
     const parsed = new URL(value);
@@ -1095,6 +1252,7 @@ function parseUrlMetadata(value) {
       protocol: parsed.protocol,
       hostname: parsed.hostname.toLowerCase(),
       pathname: parsed.pathname || "/",
+      hasQuery: parsed.search.length > 1,
       sanitizedUrl: `${parsed.origin}${parsed.pathname}`
     };
   } catch (error) {
@@ -1102,6 +1260,7 @@ function parseUrlMetadata(value) {
       protocol: "",
       hostname: "",
       pathname: "",
+      hasQuery: false,
       sanitizedUrl: ""
     };
   }

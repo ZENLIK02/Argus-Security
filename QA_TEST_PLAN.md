@@ -9,9 +9,10 @@ Run before manual browser QA:
 ```powershell
 cd Desktop/Project-Argus-Extension
 node tests/run_detector_tests.js
+node tests/run_exfiltration_calibration.js
 ```
 
-Expected: every detector case passes under policy `2.0.0`. A failed SAFE, score range, category, tool-result, or confidence assertion blocks release.
+Expected: 15/15 detector regressions and 65/65 exfiltration calibration cases pass under policy `3.0.0`. A failed SAFE, score range, category, tool-result, or confidence assertion blocks release.
 
 ## Setup
 
@@ -36,12 +37,12 @@ uvicorn main:app --reload --port 8000
 | Safe local page | `http://localhost:8000/test-site/safe-site.html` | SAFE | Score in 0-34 range, no warning overlay, source LOCAL_MODEL |
 | Fake app store | `http://localhost:8000/test-site/fake-store.html` | HIGH_RISK | Warning overlay appears, category FAKE_APP_STORE or MALICIOUS_APK, reasons mention APK/password/OTP/store |
 | Fake bank | `http://localhost:8000/test-site/fake-bank.html` | HIGH_RISK | Warning overlay appears, category FAKE_BANKING, reasons mention banking/password/OTP |
-| Gambling content | `http://localhost:8000/test-site/gambling-risk.html` | SUSPICIOUS / CONTENT_RISK | Score in 35-69 range unless stronger behavior appears |
-| Adult content | `http://localhost:8000/test-site/adult-risk.html` | SUSPICIOUS / CONTENT_RISK | Score in 35-69 range unless stronger behavior appears |
-| Gambling clean category | `http://localhost:8000/test-site/gambling-clean.html` | SUSPICIOUS / CONTENT_RISK | Gambling keywords alone should not become HIGH_RISK |
+| Gambling content | `http://localhost:8000/test-site/gambling-risk.html` | SAFE | Content-only score stays at or below 12 unless stronger behavior appears |
+| Adult content | `http://localhost:8000/test-site/adult-risk.html` | SAFE | Content-only score stays at or below 12 unless stronger behavior appears |
+| Gambling clean category | `http://localhost:8000/test-site/gambling-clean.html` | SAFE | Gambling keywords alone have minimal score impact |
 | Gambling data leak | `http://localhost:8000/test-site/gambling-data-leak.html` | HIGH_RISK / DATA_EXFILTRATION | Cross-domain payment/deposit form and hidden iframe are detected |
-| Adult clean category | `http://localhost:8000/test-site/adult-clean.html` | SUSPICIOUS / CONTENT_RISK | Adult keywords alone should not become HIGH_RISK |
-| Adult APK leak | `http://localhost:8000/test-site/adult-apk-leak.html` | HIGH_RISK / MALICIOUS_APK | HTTP APK link and fake install behavior are detected |
+| Adult clean category | `http://localhost:8000/test-site/adult-clean.html` | SAFE | Adult keywords alone have minimal score impact |
+| Adult APK leak | `http://localhost:8000/test-site/adult-apk-leak.html` | SUSPICIOUS / MALICIOUS_APK | Direct third-party/HTTP APK evidence is detected without content category dominating |
 | Cross-domain login | `http://localhost:8000/test-site/cross-domain-login.html` | HIGH_RISK / DATA_EXFILTRATION | Password form posts to a different domain |
 | HTTP form risk | `http://localhost:8000/test-site/http-form-risk.html` | HIGH_RISK / INSECURE_FORM_SUBMISSION | Password/OTP form action uses HTTP |
 | Google Search | `https://www.google.com/search?q=google+play+download+app` | SAFE | Search page stays SAFE without APK/password/OTP false positive |
@@ -55,9 +56,10 @@ These pages are intentionally designed to be hard for Argus to catch. They shoul
 
 | Test | URL / Page | Expected | Checks |
 | --- | --- | --- | --- |
-| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | HIGH_RISK / DATA_EXFILTRATION | Uses credential-like text fields, delayed JavaScript-built endpoint, local-looking form action, no typed value exfiltration |
-| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | HIGH_RISK / DATA_EXFILTRATION | Uses popup/postMessage consent pattern and script network-send logic |
-| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | HIGH_RISK / DATA_EXFILTRATION | Uses clipboard/file metadata pattern, dynamic endpoint assembly, guarded network behavior, no typed value exfiltration |
+| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | SUSPICIOUS / DATA_EXFILTRATION | Static intent stays below HIGH_RISK until an actual unsafe request is observed |
+| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | SUSPICIOUS / DATA_EXFILTRATION | Popup/postMessage plus network-send intent is supporting evidence, not proof of transfer |
+| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | SUSPICIOUS / DATA_EXFILTRATION | Clipboard/file metadata plus network-send intent stays below HIGH_RISK without an observed request |
+| Plaintext network demo | `http://localhost:8000/Website_testonly/network-plaintext-demo.html` | HIGH_RISK / INSECURE_FORM_SUBMISSION | Sensitive form over HTTP scores high; after dummy submit, evidence includes an observed unencrypted write |
 
 ## Export Report Test
 
@@ -74,7 +76,7 @@ These pages are intentionally designed to be hard for Argus to catch. They shoul
 - SAFE trusted/search pages do not show warning overlays.
 - HIGH_RISK demo pages show clear warning overlays.
 - Popup source shows `LOCAL_MODEL`.
-- Popup shows policy `2.0.0`, decision confidence, and analyzer results.
+- Popup shows policy `3.0.0`, decision confidence, decision tier, and analyzer results.
 - Automated detector regression suite passes completely.
 - Adult/gambling category pages stay below HIGH_RISK unless data-leak, credential, APK, or insecure form behavior is present.
 - Exported report contains only metadata and risk signals.

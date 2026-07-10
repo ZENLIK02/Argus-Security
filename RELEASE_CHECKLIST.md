@@ -20,6 +20,7 @@ Run this before rebuilding the ZIP for submission or presentation.
 - [ ] `trusted_domains.json` is valid JSON.
 - [ ] `risky_categories.json` is valid JSON.
 - [ ] `engine/detection_policy.json` is valid JSON.
+- [ ] `datasets/exfiltration_eval_cases.json` is valid JSON and contains 65 labeled cases.
 - [ ] JavaScript files pass syntax check:
   - `content.js`
   - `service_worker.js`
@@ -29,21 +30,23 @@ Run this before rebuilding the ZIP for submission or presentation.
   - `tests/run_detector_tests.js`
 - [ ] `backend/main.py` compiles.
 - [ ] `node tests/run_detector_tests.js` passes every case.
+- [ ] `node tests/run_exfiltration_calibration.js` passes all 65 cases.
 - [ ] Test pages return expected results:
   - `safe-site.html`: SAFE
   - `fake-store.html`: HIGH_RISK
   - `fake-bank.html`: HIGH_RISK
-  - `gambling-risk.html`: SUSPICIOUS / CONTENT_RISK
-  - `adult-risk.html`: SUSPICIOUS / CONTENT_RISK
-  - `gambling-clean.html`: SUSPICIOUS / CONTENT_RISK, not HIGH_RISK
+  - `gambling-risk.html`: SAFE, content-only score <= 12
+  - `adult-risk.html`: SAFE, content-only score <= 12
+  - `gambling-clean.html`: SAFE, content-only score <= 12
   - `gambling-data-leak.html`: HIGH_RISK / DATA_EXFILTRATION
-  - `adult-clean.html`: SUSPICIOUS / CONTENT_RISK, not HIGH_RISK
-  - `adult-apk-leak.html`: HIGH_RISK / MALICIOUS_APK
+  - `adult-clean.html`: SAFE, content-only score <= 12
+  - `adult-apk-leak.html`: SUSPICIOUS / MALICIOUS_APK
   - `cross-domain-login.html`: HIGH_RISK / DATA_EXFILTRATION
   - `http-form-risk.html`: HIGH_RISK / INSECURE_FORM_SUBMISSION
-  - `Website_testonly/quiet-profile-sync.html`: HIGH_RISK / DATA_EXFILTRATION
-  - `Website_testonly/consent-mirror.html`: HIGH_RISK / DATA_EXFILTRATION
-  - `Website_testonly/clipboard-vault.html`: HIGH_RISK / DATA_EXFILTRATION
+  - `Website_testonly/quiet-profile-sync.html`: SUSPICIOUS / DATA_EXFILTRATION
+  - `Website_testonly/consent-mirror.html`: SUSPICIOUS / DATA_EXFILTRATION
+  - `Website_testonly/clipboard-vault.html`: SUSPICIOUS / DATA_EXFILTRATION
+  - `Website_testonly/network-plaintext-demo.html`: HIGH_RISK / INSECURE_FORM_SUBMISSION
 - [ ] Google Search, YouTube, Roblox, and Yahoo Finance remain SAFE.
 - [ ] Popup source shows `LOCAL_MODEL`.
 - [ ] Popup displays confidence, policy version, and analyzer evidence.
@@ -54,5 +57,5 @@ Run this before rebuilding the ZIP for submission or presentation.
 - [ ] `scripts/build_zip.ps1` completes successfully.
 - [ ] `Project-Argus-Extension.zip` builds successfully.
 - [ ] ZIP contains extension files, local demo server source, docs, and test pages.
-- [ ] ZIP contains `engine/`, `tests/`, and `ARCHITECTURE.md`.
+- [ ] ZIP contains `engine/`, `datasets/`, `tests/`, and `ARCHITECTURE.md`.
 - [ ] ZIP does not contain secrets or local virtual environment files.

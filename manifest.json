@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Project Argus",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "A local browser security engine that correlates phishing, data-leak, scam, and suspicious download evidence.",
   "permissions": [
     "storage",

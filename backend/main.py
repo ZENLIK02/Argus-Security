@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -44,6 +44,7 @@ ResultSource = Literal["LOCAL_MODEL"]
 
 class DataLeakSignals(BaseModel):
     formCount: int = 0
+    sensitiveFormCount: int = 0
     formActionUrls: list[str] = Field(default_factory=list)
     emptyFormActionCount: int = 0
     httpFormActionCount: int = 0
@@ -52,6 +53,8 @@ class DataLeakSignals(BaseModel):
     otpOrPaymentCrossDomainForm: bool = False
     passwordHttpForm: bool = False
     otpOrPaymentHttpForm: bool = False
+    sameOriginSensitiveHttpForm: bool = False
+    httpPageWithSensitiveForm: bool = False
     hiddenInputCount: int = 0
     hiddenIframeCount: int = 0
     externalScriptCount: int = 0
@@ -86,14 +89,26 @@ class NetworkSignals(BaseModel):
     thirdPartyFrameRequests: int = 0
     thirdPartyXHRRequests: int = 0
     insecureHttpRequests: int = 0
+    writeRequests: int = 0
+    thirdPartyWriteRequests: int = 0
+    insecureWriteRequests: int = 0
     suspiciousRequestDomains: list[str] = Field(default_factory=list)
     requestsAfterFormSubmit: int = 0
     requestsAfterPasswordFocus: int = 0
+    writeRequestsAfterFormSubmit: int = 0
+    insecureWriteRequestsAfterFormSubmit: int = 0
+    thirdPartyWriteRequestsAfterFormSubmit: int = 0
+    sensitiveWriteRequestsAfterFormSubmit: int = 0
+    insecureSensitiveWriteRequests: int = 0
+    crossDomainSensitiveWriteRequests: int = 0
+    beaconOrPingAfterSensitiveInput: int = 0
+    queryBearingGetAfterSensitiveForm: int = 0
 
 
 class PageSignals(BaseModel):
     url: str
     domain: str
+    pageProtocol: str = ""
     isTrustedDomain: bool = False
     isSearchEnginePage: bool = False
     hasPasswordField: bool = False
@@ -151,6 +166,17 @@ def analyze(signals: PageSignals) -> AnalysisResult:
     return build_local_model_result(signals)
 
 
+@app.post("/demo-collect")
+async def demo_collect(request: Request) -> dict[str, Any]:
+    body = await request.body()
+    return {
+        "ok": True,
+        "receivedBytes": len(body),
+        "stored": False,
+        "message": "Dummy plaintext demo payload received and discarded.",
+    }
+
+
 def build_local_model_result(signals: PageSignals) -> AnalysisResult:
     score = clamp_score(signals.ruleBasedScore)
 
@@ -158,9 +184,9 @@ def build_local_model_result(signals: PageSignals) -> AnalysisResult:
         score = estimate_score_from_metadata(signals)
 
     category = signals.ruleBasedCategory if signals.ruleBasedCategory and signals.ruleBasedCategory != "SAFE" else category_from_signals(signals)
-    if category in {"GAMBLING", "ADULT_CONTENT"} and not has_critical_evidence(signals):
-        category = "CONTENT_RISK"
-        score = min(max(score, SUSPICIOUS_MIN_SCORE), 60)
+    if category in {"GAMBLING", "ADULT_CONTENT", "CONTENT_RISK", "MALVERTISING"} and not has_critical_evidence(signals):
+        category = "SAFE"
+        score = min(score, 12)
 
     reasons = signals.ruleBasedReasons or local_reasons(signals, category)
 
@@ -175,7 +201,6 @@ def build_local_model_result(signals: PageSignals) -> AnalysisResult:
 
 
 def estimate_score_from_metadata(signals: PageSignals) -> int:
-    score = 0
     data_leak = signals.dataLeakSignals
     network = signals.networkSignals
 
@@ -183,54 +208,35 @@ def estimate_score_from_metadata(signals: PageSignals) -> int:
         return 0
     if signals.isTrustedDomain and not has_critical_evidence(signals):
         return 0
-    if signals.hasPasswordField:
-        score += 25
-    if signals.hasOTP:
-        score += 25
-    if signals.hasLoginKeyword:
-        score += 15
-    if signals.apkLinks:
-        score += 35
-    if data_leak.crossDomainFormActionCount:
-        score += 25
-    if data_leak.passwordCrossDomainForm:
-        score += 50
-    if data_leak.otpOrPaymentCrossDomainForm:
-        score += 60
-    if data_leak.httpFormActionCount:
-        score += 60
-    if data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm:
-        score += 80
-    if data_leak.thirdPartyApkLinks:
-        score += 35
-    if data_leak.httpApkLinks:
-        score += 50
-    if data_leak.credentialLikeTextFieldCount:
-        score += 30
-    if data_leak.credentialLikeTextFieldCount and data_leak.localFormWithJsSinkIndicator:
-        score += 45
-    if data_leak.scriptNetworkSinkCount and data_leak.externalUrlHints:
-        score += 35
-    if data_leak.dynamicEndpointAssemblyCount and data_leak.scriptNetworkSinkCount:
-        score += 30
-    if data_leak.delayedRelayIndicator and data_leak.localFormWithJsSinkIndicator:
-        score += 35
-    if data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount:
-        score += 45
-    if data_leak.clipboardReadIndicator or data_leak.fileMetadataHarvestIndicator:
-        score += 35
-    if data_leak.sensitiveTextareaCount and (data_leak.clipboardReadIndicator or data_leak.scriptNetworkSinkCount):
-        score += 40
-    if data_leak.guardedNetworkToggleIndicator and data_leak.scriptNetworkSinkCount:
-        score += 20
-    if network.requestsAfterFormSubmit >= 3:
-        score += 40
-    if network.requestsAfterPasswordFocus >= 3:
-        score += 35
-    if signals.foundGamblingKeywords or signals.foundAdultKeywords:
-        score = max(score, SUSPICIOUS_MIN_SCORE)
 
-    return clamp_score(score)
+    if network.insecureSensitiveWriteRequests:
+        return 92
+    if network.crossDomainSensitiveWriteRequests:
+        return 84
+    if network.beaconOrPingAfterSensitiveInput or network.queryBearingGetAfterSensitiveForm:
+        return 76
+    if data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm or data_leak.sameOriginSensitiveHttpForm or data_leak.httpPageWithSensitiveForm:
+        return 88
+    if data_leak.passwordCrossDomainForm or data_leak.otpOrPaymentCrossDomainForm or (
+        data_leak.sensitiveFormCount and data_leak.crossDomainFormActionCount
+    ):
+        return 80
+    if network.insecureWriteRequestsAfterFormSubmit:
+        return 40
+
+    score = 0
+    score += 4 if signals.hasPasswordField else 0
+    score += 4 if signals.hasOTP else 0
+    score += 2 if signals.hasLoginKeyword else 0
+    score += 14 if signals.apkLinks else 0
+    score += 10 if data_leak.httpFormActionCount or data_leak.crossDomainFormActionCount else 0
+    score += 20 if data_leak.scriptNetworkSinkCount and data_leak.externalUrlHints else 0
+    score += 18 if data_leak.dynamicEndpointAssemblyCount and data_leak.scriptNetworkSinkCount else 0
+    score += 15 if data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount else 0
+    score += 4 if data_leak.clipboardReadIndicator or data_leak.fileMetadataHarvestIndicator else 0
+    score += 6 if signals.hasAdHeavySignal else 0
+    score += 3 if signals.foundGamblingKeywords or signals.foundAdultKeywords else 0
+    return min(clamp_score(score), 60)
 
 
 def local_reasons(signals: PageSignals, category: str) -> list[str]:
@@ -252,6 +258,8 @@ def local_reasons(signals: PageSignals, category: str) -> list[str]:
         reasons.append("Sensitive form metadata may submit to a different domain.")
     if data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm:
         reasons.append("Sensitive form metadata may submit over insecure HTTP.")
+    if data_leak.sameOriginSensitiveHttpForm or data_leak.httpPageWithSensitiveForm:
+        reasons.append("A sensitive form can submit over an unencrypted HTTP page.")
     if data_leak.thirdPartyApkLinks or data_leak.httpApkLinks:
         reasons.append("APK link metadata points to third-party or insecure HTTP source.")
     if data_leak.credentialLikeTextFieldCount and data_leak.localFormWithJsSinkIndicator:
@@ -264,8 +272,14 @@ def local_reasons(signals: PageSignals, category: str) -> list[str]:
         reasons.append("Page can inspect clipboard or uploaded-file metadata.")
     if network.requestsAfterFormSubmit >= 3 or network.requestsAfterPasswordFocus >= 3:
         reasons.append("Third-party network activity increased after form or password interaction.")
+    if network.insecureSensitiveWriteRequests:
+        reasons.append("An unencrypted write request followed a sensitive form submission.")
+    if network.crossDomainSensitiveWriteRequests:
+        reasons.append("A cross-domain write request followed a sensitive form submission.")
+    if network.beaconOrPingAfterSensitiveInput or network.queryBearingGetAfterSensitiveForm:
+        reasons.append("Beacon-like network activity followed sensitive input interaction.")
     if category == "CONTENT_RISK":
-        reasons.append("Adult/gambling category detected, capped below high risk without stronger behavior.")
+        reasons.append("Adult/gambling category detected with minimal score impact and no stronger behavior.")
 
     return reasons
 
@@ -273,57 +287,36 @@ def local_reasons(signals: PageSignals, category: str) -> list[str]:
 def has_critical_evidence(signals: PageSignals) -> bool:
     data_leak = signals.dataLeakSignals
     network = signals.networkSignals
-    has_real_apk_link = len(signals.apkLinks) > 0
-    has_fake_store_apk_combo = has_real_apk_link and len(signals.foundStoreKeywords) > 0
-    has_credential_combo = signals.hasPasswordField and (signals.hasOTP or signals.hasLoginKeyword)
-    has_banking_credential_combo = bool(signals.foundBankingKeywords) and signals.hasPasswordField and signals.hasOTP
-    has_cross_domain_sensitive_form = data_leak.passwordCrossDomainForm or data_leak.otpOrPaymentCrossDomainForm
-    has_insecure_sensitive_form = data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm
-    has_insecure_form_context = data_leak.httpFormActionCount > 0 and (signals.hasPasswordField or signals.hasOTP or signals.hasLoginKeyword)
-    has_apk_leak = bool(data_leak.thirdPartyApkLinks) or bool(data_leak.httpApkLinks)
-    has_hidden_iframe_credential_combo = data_leak.hiddenIframeCount > 0 and (signals.hasPasswordField or signals.hasOTP)
-    has_network_exfiltration_pattern = network.requestsAfterFormSubmit >= 3 or network.requestsAfterPasswordFocus >= 3
-    has_evasive_script_pattern = (
-        (data_leak.credentialLikeTextFieldCount > 0 and data_leak.localFormWithJsSinkIndicator)
-        or (data_leak.scriptNetworkSinkCount > 0 and data_leak.dynamicEndpointAssemblyCount > 0)
-        or (data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount > 0)
-        or data_leak.clipboardReadIndicator
-        or data_leak.fileMetadataHarvestIndicator
-    )
-
     return (
-        not signals.isTrustedDomain
-        and (
-            has_fake_store_apk_combo
-            or has_credential_combo
-            or has_banking_credential_combo
-            or has_cross_domain_sensitive_form
-            or has_insecure_sensitive_form
-            or has_insecure_form_context
-            or has_apk_leak
-            or has_hidden_iframe_credential_combo
-            or has_network_exfiltration_pattern
-            or has_evasive_script_pattern
-        )
+        network.insecureSensitiveWriteRequests > 0
+        or network.crossDomainSensitiveWriteRequests > 0
+        or network.beaconOrPingAfterSensitiveInput > 0
+        or network.queryBearingGetAfterSensitiveForm > 0
+        or data_leak.passwordCrossDomainForm
+        or data_leak.otpOrPaymentCrossDomainForm
+        or (data_leak.sensitiveFormCount > 0 and data_leak.crossDomainFormActionCount > 0)
+        or data_leak.passwordHttpForm
+        or data_leak.otpOrPaymentHttpForm
+        or data_leak.sameOriginSensitiveHttpForm
+        or data_leak.httpPageWithSensitiveForm
     )
 
 
 def category_from_signals(signals: PageSignals) -> str:
     data_leak = signals.dataLeakSignals
     network = signals.networkSignals
-    if data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm or (
-        data_leak.httpFormActionCount > 0 and (signals.hasPasswordField or signals.hasOTP or signals.hasLoginKeyword)
-    ):
+    if network.insecureSensitiveWriteRequests or data_leak.passwordHttpForm or data_leak.otpOrPaymentHttpForm or data_leak.sameOriginSensitiveHttpForm or data_leak.httpPageWithSensitiveForm:
         return "INSECURE_FORM_SUBMISSION"
     if (
-        data_leak.passwordCrossDomainForm
+        network.crossDomainSensitiveWriteRequests
+        or network.beaconOrPingAfterSensitiveInput
+        or network.queryBearingGetAfterSensitiveForm
+        or data_leak.passwordCrossDomainForm
         or data_leak.otpOrPaymentCrossDomainForm
-        or data_leak.crossDomainFormActionCount > 0
+        or (data_leak.sensitiveFormCount > 0 and data_leak.crossDomainFormActionCount > 0)
         or (data_leak.credentialLikeTextFieldCount > 0 and data_leak.localFormWithJsSinkIndicator)
         or (data_leak.scriptNetworkSinkCount > 0 and data_leak.dynamicEndpointAssemblyCount > 0)
         or (data_leak.popupMessageTrapIndicator and data_leak.scriptNetworkSinkCount > 0)
-        or data_leak.clipboardReadIndicator
-        or data_leak.fileMetadataHarvestIndicator
         or network.requestsAfterFormSubmit >= 3
         or network.requestsAfterPasswordFocus >= 3
     ):

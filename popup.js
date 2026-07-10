@@ -11,6 +11,7 @@ const trustedEl = document.getElementById("trusted");
 const modelEl = document.getElementById("model");
 const confidenceEl = document.getElementById("confidence");
 const policyEl = document.getElementById("policy");
+const decisionTierEl = document.getElementById("decisionTier");
 const guardGridEl = document.getElementById("guardGrid");
 const analyzerListEl = document.getElementById("analyzerList");
 const reasonsEl = document.getElementById("reasons");
@@ -70,6 +71,7 @@ function showEmptyState(tab) {
   modelEl.textContent = "Model: local only";
   confidenceEl.textContent = "Confidence: unknown";
   policyEl.textContent = "Policy: unknown";
+  decisionTierEl.textContent = "Decision tier: unknown";
   renderDataLeakGuard(null);
   renderAnalyzerResults(null);
   reasonsEl.replaceChildren();
@@ -102,6 +104,7 @@ function renderScan(scan) {
   modelEl.textContent = `Model: ${getModelStatus(scan.modelStatus)}`;
   confidenceEl.textContent = `Confidence: ${formatConfidence(risk.confidence)}`;
   policyEl.textContent = `Policy: ${risk.policyVersion || "legacy"}`;
+  decisionTierEl.textContent = `Decision tier: ${formatDecisionTier(risk.decisionTier)}`;
   renderDataLeakGuard(scan);
   renderAnalyzerResults(scan);
 
@@ -133,6 +136,7 @@ function exportScanReport() {
     reasons: Array.isArray(risk.reasons) ? risk.reasons : [],
     confidence: normalizeConfidence(risk.confidence),
     policyVersion: risk.policyVersion || null,
+    decisionTier: risk.decisionTier || "UNKNOWN",
     evidence: sanitizeEvidence(risk.evidence),
     toolResults: sanitizeToolResults(risk.toolResults),
     modelStatus: latestScan.modelStatus || { mode: "LOCAL_MODEL", externalAi: false },
@@ -204,11 +208,22 @@ function formatConfidence(value) {
   return normalized === null ? "unknown" : `${Math.round(normalized * 100)}%`;
 }
 
+function formatDecisionTier(value) {
+  const labels = {
+    OBSERVED_DATA_FLOW: "1 - observed data flow",
+    CONTEXT_OR_INTENT: "2 - context or intent",
+    CONTENT_CATEGORY: "3 - content category",
+    NO_FINDINGS: "none"
+  };
+  return labels[value] || "unknown";
+}
+
 function sanitizeEvidence(value) {
   return Array.isArray(value) ? value.slice(0, 30).map((item) => ({
     id: String(item.id || "").slice(0, 80),
     tool: String(item.tool || "").slice(0, 80),
     category: String(item.category || "").slice(0, 80),
+    priority: Math.max(1, Math.min(3, Number(item.priority) || 3)),
     points: Number(item.points) || 0,
     confidence: normalizeConfidence(item.confidence),
     severity: String(item.severity || "").slice(0, 20),
@@ -248,12 +263,16 @@ function renderDataLeakGuard(scan) {
   const items = [
     ["Cross-domain forms", dataLeak.crossDomainFormActionCount],
     ["HTTP form actions", dataLeak.httpFormActionCount],
+    ["Sensitive forms", dataLeak.sensitiveFormCount],
     ["Hidden iframes", dataLeak.hiddenIframeCount],
     ["External scripts", dataLeak.externalScriptCount],
     ["Third-party requests", network.thirdPartyRequests],
     ["Third-party XHR/fetch", network.thirdPartyXHRRequests],
     ["After form submit", network.requestsAfterFormSubmit],
     ["After password focus", network.requestsAfterPasswordFocus],
+    ["Unencrypted sensitive writes", network.insecureSensitiveWriteRequests],
+    ["Cross-domain sensitive writes", network.crossDomainSensitiveWriteRequests],
+    ["Sensitive beacons/pixels", Number(network.beaconOrPingAfterSensitiveInput || 0) + Number(network.queryBearingGetAfterSensitiveForm || 0)],
     ["Form-to-third-party", network.temporalSignals && network.temporalSignals.formSubmitThenThirdPartyCount],
     ["Post-form redirects", network.temporalSignals && network.temporalSignals.formSubmitThenCrossDomainRedirectCount],
     ["Credential-like fields", dataLeak.credentialLikeTextFieldCount],
@@ -284,12 +303,15 @@ function sanitizeDataLeakSignals(signals) {
   const raw = signals || {};
   return {
     formCount: Number(raw.formCount) || 0,
+    sensitiveFormCount: Number(raw.sensitiveFormCount) || 0,
     crossDomainFormActionCount: Number(raw.crossDomainFormActionCount) || 0,
     httpFormActionCount: Number(raw.httpFormActionCount) || 0,
     passwordCrossDomainForm: Boolean(raw.passwordCrossDomainForm),
     otpOrPaymentCrossDomainForm: Boolean(raw.otpOrPaymentCrossDomainForm),
     passwordHttpForm: Boolean(raw.passwordHttpForm),
     otpOrPaymentHttpForm: Boolean(raw.otpOrPaymentHttpForm),
+    sameOriginSensitiveHttpForm: Boolean(raw.sameOriginSensitiveHttpForm),
+    httpPageWithSensitiveForm: Boolean(raw.httpPageWithSensitiveForm),
     hiddenInputCount: Number(raw.hiddenInputCount) || 0,
     hiddenIframeCount: Number(raw.hiddenIframeCount) || 0,
     externalScriptCount: Number(raw.externalScriptCount) || 0,
@@ -323,14 +345,28 @@ function sanitizeNetworkSignals(signals) {
     thirdPartyFrameRequests: Number(raw.thirdPartyFrameRequests) || 0,
     thirdPartyXHRRequests: Number(raw.thirdPartyXHRRequests) || 0,
     insecureHttpRequests: Number(raw.insecureHttpRequests) || 0,
+    writeRequests: Number(raw.writeRequests) || 0,
+    thirdPartyWriteRequests: Number(raw.thirdPartyWriteRequests) || 0,
+    insecureWriteRequests: Number(raw.insecureWriteRequests) || 0,
     requestsAfterFormSubmit: Number(raw.requestsAfterFormSubmit) || 0,
     requestsAfterPasswordFocus: Number(raw.requestsAfterPasswordFocus) || 0,
+    writeRequestsAfterFormSubmit: Number(raw.writeRequestsAfterFormSubmit) || 0,
+    insecureWriteRequestsAfterFormSubmit: Number(raw.insecureWriteRequestsAfterFormSubmit) || 0,
+    thirdPartyWriteRequestsAfterFormSubmit: Number(raw.thirdPartyWriteRequestsAfterFormSubmit) || 0,
+    sensitiveWriteRequestsAfterFormSubmit: Number(raw.sensitiveWriteRequestsAfterFormSubmit) || 0,
+    insecureSensitiveWriteRequests: Number(raw.insecureSensitiveWriteRequests) || 0,
+    crossDomainSensitiveWriteRequests: Number(raw.crossDomainSensitiveWriteRequests) || 0,
+    beaconOrPingAfterSensitiveInput: Number(raw.beaconOrPingAfterSensitiveInput) || 0,
+    queryBearingGetAfterSensitiveForm: Number(raw.queryBearingGetAfterSensitiveForm) || 0,
     suspiciousRequestDomains: Array.isArray(raw.suspiciousRequestDomains) ? raw.suspiciousRequestDomains.slice(0, 20) : [],
     temporalSignals: {
       formSubmitThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.formSubmitThenThirdPartyCount) || 0,
       passwordFocusThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.passwordFocusThenThirdPartyCount) || 0,
       formSubmitThenCrossDomainRedirectCount: Number(raw.temporalSignals && raw.temporalSignals.formSubmitThenCrossDomainRedirectCount) || 0,
       downloadAfterFormSubmitCount: Number(raw.temporalSignals && raw.temporalSignals.downloadAfterFormSubmitCount) || 0,
+      unencryptedSensitiveWriteCount: Number(raw.temporalSignals && raw.temporalSignals.unencryptedSensitiveWriteCount) || 0,
+      crossDomainSensitiveWriteCount: Number(raw.temporalSignals && raw.temporalSignals.crossDomainSensitiveWriteCount) || 0,
+      beaconAfterSensitiveInputCount: Number(raw.temporalSignals && raw.temporalSignals.beaconAfterSensitiveInputCount) || 0,
       recentEventTypes: Array.isArray(raw.temporalSignals && raw.temporalSignals.recentEventTypes) ? raw.temporalSignals.recentEventTypes.slice(-20) : []
     }
   };

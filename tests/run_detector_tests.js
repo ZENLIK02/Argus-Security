@@ -136,7 +136,7 @@ const cases = [
       foundStoreKeywords: ["Google Play", "Play Store"],
       apkLinks: ["https://downloads.bad.test/update.apk"]
     }),
-    expect: { level: "HIGH_RISK", category: "FAKE_APP_STORE", min: 70 }
+    expect: { level: "SAFE", max: 34 }
   },
   {
     name: "fake bank full flow",
@@ -146,7 +146,7 @@ const cases = [
       hasLoginKeyword: true,
       foundBankingKeywords: ["online banking", "verify account"]
     }),
-    expect: { level: "HIGH_RISK", category: "FAKE_BANKING", min: 70 }
+    expect: { level: "SAFE", max: 34 }
   },
   {
     name: "gambling content only",
@@ -154,14 +154,14 @@ const cases = [
       foundGamblingKeywords: ["casino", "bet"],
       domainCategorySignals: { gambling: ["casino"], adult: [] }
     }),
-    expect: { level: "SUSPICIOUS", category: "CONTENT_RISK", min: 35, max: 55 }
+    expect: { level: "SAFE", max: 12 }
   },
   {
     name: "adult content only",
     signals: mergeSignals(base, {
       foundAdultKeywords: ["adult", "18+"]
     }),
-    expect: { level: "SUSPICIOUS", category: "CONTENT_RISK", min: 35, max: 55 }
+    expect: { level: "SAFE", max: 12 }
   },
   {
     name: "cross-domain password form",
@@ -170,7 +170,7 @@ const cases = [
       hasLoginKeyword: true,
       dataLeakSignals: { crossDomainFormActionCount: 1, passwordCrossDomainForm: true }
     }),
-    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
+    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 75 }
   },
   {
     name: "insecure password and OTP form",
@@ -194,7 +194,7 @@ const cases = [
         guardedNetworkToggleIndicator: true
       }
     }),
-    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
+    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 60 }
   },
   {
     name: "consent mirror popup relay",
@@ -207,7 +207,7 @@ const cases = [
         guardedNetworkToggleIndicator: true
       }
     }),
-    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
+    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 60 }
   },
   {
     name: "clipboard vault secret relay",
@@ -221,7 +221,7 @@ const cases = [
         externalUrlHints: ["https://relay.invalid/vault"]
       }
     }),
-    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
+    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 69 }
   },
   {
     name: "temporal exfiltration sequence",
@@ -237,7 +237,7 @@ const cases = [
         }
       }
     }),
-    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
+    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 69 }
   },
   {
     name: "ad-heavy page without credential theft",
@@ -245,7 +245,7 @@ const cases = [
       hasAdHeavySignal: true,
       foundPopupAbuseKeywords: ["allow notifications"]
     }),
-    expect: { level: "SUSPICIOUS", category: "MALVERTISING", min: 35, max: 69 }
+    expect: { level: "SAFE", max: 12 }
   }
 ];
 

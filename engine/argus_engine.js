@@ -8,11 +8,12 @@
   "use strict";
 
   const DEFAULT_POLICY = {
-    version: "2.0.0",
+    version: "3.0.0",
     thresholds: {
       suspicious: 35,
       highRisk: 70,
-      maximumContentOnlyScore: 55,
+      maximumContentOnlyScore: 12,
+      maximumContextOnlyScore: 60,
       trustedDomainCap: 20
     },
     combiner: {
@@ -23,7 +24,6 @@
     }
   };
 
-  const CONTENT_CATEGORIES = new Set(["CONTENT_RISK", "GAMBLING", "ADULT_CONTENT"]);
   let activePolicy = DEFAULT_POLICY;
 
   function evaluate(rawSignals, categoryConfig, rawPolicy) {
@@ -42,7 +42,8 @@
     const evidence = analyzerOutputs.flatMap((output) => output.evidence);
     evidence.push(...analyzeCombinations(signals, evidence));
 
-    const strongEvidence = evidence.some((item) => item.decisive && item.confidence >= 0.8);
+    const decisionTier = getDecisionTier(evidence);
+    const strongEvidence = evidence.some((item) => item.priority === 1 && item.decisive && item.confidence >= 0.8);
     if (signals.isSearchEnginePage && !strongEvidence) {
       return finalizeEarlySafe("Official search engine result page without concrete danger signals.", analyzerOutputs, policy, 0.97);
     }
@@ -54,11 +55,14 @@
     const categoryScores = combineByCategory(evidence, policy);
     let category = chooseCategory(categoryScores, signals);
     let score = combineCategoryScores(categoryScores, category, policy);
-    const contentOnly = isContentOnlyEvidence(evidence);
+    score = applyScoreFloors(score, evidence, policy);
 
-    if (contentOnly) {
-      score = Math.max(score > 0 ? policy.thresholds.suspicious : 0, Math.min(score, policy.thresholds.maximumContentOnlyScore));
-      category = score > 0 ? "CONTENT_RISK" : "SAFE";
+    if (decisionTier === "CONTENT_CATEGORY") {
+      score = Math.min(score, policy.thresholds.maximumContentOnlyScore);
+    }
+
+    if (decisionTier === "CONTEXT_OR_INTENT") {
+      score = Math.min(score, policy.thresholds.maximumContextOnlyScore);
     }
 
     if (signals.isTrustedDomain && !strongEvidence) {
@@ -88,6 +92,7 @@
       level,
       category: category || "SAFE",
       confidence,
+      decisionTier,
       reasons: reasons.length ? reasons : ["No high-risk indicators were detected."],
       evidence: evidence.map(publicEvidence),
       toolResults: buildToolResults(analyzerOutputs, evidence),
@@ -160,11 +165,19 @@
     if (dataLeak.otpOrPaymentCrossDomainForm) {
       evidence.push(finding("SENSITIVE_CROSS_DOMAIN", "FORM_ANALYZER", "DATA_EXFILTRATION", 72, 0.97, "critical", "OTP, payment, or bank-like fields submit to a different domain.", true));
     }
+    if (dataLeak.sensitiveFormCount > 0 && dataLeak.crossDomainFormActionCount > 0 &&
+      !dataLeak.passwordCrossDomainForm && !dataLeak.otpOrPaymentCrossDomainForm) {
+      evidence.push(finding("SENSITIVE_GENERIC_CROSS_DOMAIN", "FORM_ANALYZER", "DATA_EXFILTRATION", 78, 0.95, "critical", "A sensitive or credential-like form submits to a different domain.", true));
+    }
     if (dataLeak.httpFormActionCount > 0) {
       evidence.push(finding("HTTP_FORM", "FORM_ANALYZER", "INSECURE_FORM_SUBMISSION", 38, 0.9, "high", "A form submits information over insecure HTTP."));
     }
     if (dataLeak.passwordHttpForm || dataLeak.otpOrPaymentHttpForm) {
       evidence.push(finding("SENSITIVE_HTTP_FORM", "FORM_ANALYZER", "INSECURE_FORM_SUBMISSION", 76, 0.99, "critical", "Password, OTP, or payment data may be submitted over insecure HTTP.", true));
+    }
+    if ((dataLeak.sameOriginSensitiveHttpForm || dataLeak.httpPageWithSensitiveForm) &&
+      !dataLeak.passwordHttpForm && !dataLeak.otpOrPaymentHttpForm) {
+      evidence.push(finding("SENSITIVE_HTTP_PAGE_FORM", "FORM_ANALYZER", "INSECURE_FORM_SUBMISSION", 82, 0.98, "critical", "A sensitive or credential-like form can submit over unencrypted HTTP.", true));
     }
     if (dataLeak.hiddenIframeCount > 0 && (signals.hasPasswordField || signals.hasOTP)) {
       evidence.push(finding("HIDDEN_FRAME_WITH_CREDENTIALS", "FORM_ANALYZER", "DATA_EXFILTRATION", 25, 0.78, "high", "Hidden iframe appears on a page collecting credentials."));
@@ -251,6 +264,24 @@
     const evidence = [];
     const network = networkOf(signals);
     const temporal = temporalOf(signals);
+    if (network.insecureSensitiveWriteRequests > 0) {
+      evidence.push(finding("UNENCRYPTED_SENSITIVE_WRITE", "NETWORK_ANALYZER", "INSECURE_FORM_SUBMISSION", 100, 0.99, "critical", "A sensitive form was followed by an unencrypted HTTP write request.", true));
+    }
+    if (network.crossDomainSensitiveWriteRequests > 0) {
+      evidence.push(finding("CROSS_DOMAIN_SENSITIVE_WRITE", "NETWORK_ANALYZER", "DATA_EXFILTRATION", 95, 0.98, "critical", "A sensitive form was followed by a write request to another domain.", true));
+    }
+    if (network.beaconOrPingAfterSensitiveInput > 0) {
+      evidence.push(finding("BEACON_AFTER_SENSITIVE_INPUT", "NETWORK_ANALYZER", "DATA_EXFILTRATION", 88, 0.96, "critical", "A beacon or ping request occurred after sensitive input interaction.", true));
+    }
+    if (network.queryBearingGetAfterSensitiveForm > 0) {
+      evidence.push(finding("QUERY_GET_AFTER_SENSITIVE_FORM", "NETWORK_ANALYZER", "DATA_EXFILTRATION", 84, 0.94, "critical", "A query-bearing image request went to another domain after a sensitive form submission.", true));
+    }
+    if (network.insecureWriteRequestsAfterFormSubmit > 0 && network.insecureSensitiveWriteRequests === 0) {
+      evidence.push(finding("UNENCRYPTED_FORM_WRITE", "NETWORK_ANALYZER", "INSECURE_FORM_SUBMISSION", 45, 0.88, "high", "A form submission was followed by an unencrypted HTTP write request.", true));
+    }
+    if (network.thirdPartyWriteRequestsAfterFormSubmit > 0 && network.crossDomainSensitiveWriteRequests === 0) {
+      evidence.push(finding("THIRD_PARTY_FORM_WRITE", "NETWORK_ANALYZER", "DATA_EXFILTRATION", 12, 0.72, "medium", "A form submission was followed by a write request to another domain."));
+    }
     if (network.thirdPartyXHRRequests >= 3 && network.requestsAfterFormSubmit >= 3) {
       evidence.push(finding("POST_SUBMIT_THIRD_PARTY", "NETWORK_ANALYZER", "DATA_EXFILTRATION", 34, 0.88, "high", "Multiple third-party requests occurred shortly after a form submission.", true));
     }
@@ -272,6 +303,7 @@
   function analyzeCombinations(signals) {
     const evidence = [];
     const dataLeak = dataLeakOf(signals);
+    const network = networkOf(signals);
     const temporal = temporalOf(signals);
     if (!signals.isTrustedDomain && signals.hasPasswordField && signals.hasOTP && signals.hasLoginKeyword) {
       evidence.push(finding("FULL_CREDENTIAL_FLOW", "DECISION_COMBINER", "PHISHING_LOGIN", 28, 0.92, "high", "Password, OTP, and account-verification signals appear together.", true));
@@ -290,6 +322,12 @@
     }
     if (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0 && toArray(dataLeak.externalUrlHints).length > 0) {
       evidence.push(finding("POPUP_EXTERNAL_RELAY", "DECISION_COMBINER", "DATA_EXFILTRATION", 34, 0.94, "critical", "Popup messages can flow into script logic that references an external endpoint.", true));
+    }
+    if (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0 && toArray(dataLeak.externalUrlHints).length > 0) {
+      evidence.push(finding("STATIC_EXFIL_INTENT", "DECISION_COMBINER", "DATA_EXFILTRATION", 10, 0.9, "medium", "Static script analysis found an assembled external endpoint connected to network-send logic."));
+    }
+    if (network.insecureSensitiveWriteRequests > 0 && network.crossDomainSensitiveWriteRequests > 0) {
+      evidence.push(finding("OBSERVED_UNPROTECTED_EXFILTRATION", "DECISION_COMBINER", "DATA_EXFILTRATION", 100, 0.99, "critical", "Sensitive interaction was followed by an unencrypted write to another domain.", true));
     }
     if (temporal.formSubmitThenThirdPartyCount >= 3 && temporal.formSubmitThenCrossDomainRedirectCount > 0) {
       evidence.push(finding("EXFILTRATION_SEQUENCE", "DECISION_COMBINER", "DATA_EXFILTRATION", 48, 0.97, "critical", "Form submission was followed by third-party requests and a cross-domain redirect.", true));
@@ -331,8 +369,11 @@
     const dataLeak = dataLeakOf(signals);
     const network = networkOf(signals);
     const temporal = temporalOf(signals);
-    if (dataLeak.passwordHttpForm || dataLeak.otpOrPaymentHttpForm) return "INSECURE_FORM_SUBMISSION";
+    if (network.insecureSensitiveWriteRequests > 0 || dataLeak.passwordHttpForm || dataLeak.otpOrPaymentHttpForm ||
+      dataLeak.sameOriginSensitiveHttpForm || dataLeak.httpPageWithSensitiveForm) return "INSECURE_FORM_SUBMISSION";
     if (dataLeak.passwordCrossDomainForm || dataLeak.otpOrPaymentCrossDomainForm ||
+      (dataLeak.sensitiveFormCount > 0 && dataLeak.crossDomainFormActionCount > 0) ||
+      network.crossDomainSensitiveWriteRequests > 0 || network.beaconOrPingAfterSensitiveInput > 0 || network.queryBearingGetAfterSensitiveForm > 0 ||
       (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
       (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
       network.requestsAfterFormSubmit >= 3 || network.requestsAfterPasswordFocus >= 3 ||
@@ -360,7 +401,7 @@
   }
 
   function selectReasons(evidence, policy) {
-    return unique(evidence.slice().sort((a, b) => effectivePoints(b) - effectivePoints(a))
+    return unique(evidence.slice().sort((a, b) => a.priority - b.priority || effectivePoints(b) - effectivePoints(a))
       .slice(0, policy.combiner.maximumReasons).map((item) => item.message));
   }
 
@@ -387,6 +428,7 @@
       level: "SAFE",
       category: "SAFE",
       confidence,
+      decisionTier: "NO_FINDINGS",
       reasons: [reason],
       evidence: [],
       toolResults: buildToolResults(outputs, []),
@@ -399,7 +441,9 @@
   function finding(id, toolName, category, weight, confidence, severity, message, decisive) {
     const configuredWeight = activePolicy.weights && Number(activePolicy.weights[id]);
     const finalWeight = Number.isFinite(configuredWeight) ? configuredWeight : weight;
-    return { id, tool: toolName, category, weight: finalWeight, confidence, severity, message, decisive: Boolean(decisive) };
+    const configuredPriority = activePolicy.priorities && Number(activePolicy.priorities[id]);
+    const priority = Number.isFinite(configuredPriority) ? configuredPriority : defaultPriority(toolName, id);
+    return { id, tool: toolName, category, weight: finalWeight, confidence, priority, severity, message, decisive: Boolean(decisive) };
   }
 
   function tool(name, evidence) {
@@ -411,6 +455,7 @@
       id: item.id,
       tool: item.tool,
       category: item.category,
+      priority: item.priority,
       points: Math.round(effectivePoints(item)),
       confidence: roundConfidence(item.confidence),
       severity: item.severity,
@@ -429,8 +474,27 @@
     }
   }
 
-  function isContentOnlyEvidence(evidence) {
-    return evidence.length > 0 && evidence.every((item) => CONTENT_CATEGORIES.has(item.category));
+  function getDecisionTier(evidence) {
+    if (evidence.some((item) => item.priority === 1)) return "OBSERVED_DATA_FLOW";
+    if (evidence.some((item) => item.priority === 2)) return "CONTEXT_OR_INTENT";
+    if (evidence.some((item) => item.priority === 3)) return "CONTENT_CATEGORY";
+    return "NO_FINDINGS";
+  }
+
+  function defaultPriority(toolName, id) {
+    if (["SENSITIVE_HTTP_FORM", "SENSITIVE_HTTP_PAGE_FORM", "PASSWORD_CROSS_DOMAIN", "SENSITIVE_CROSS_DOMAIN", "SENSITIVE_GENERIC_CROSS_DOMAIN"].includes(id)) return 1;
+    if (toolName === "NETWORK_ANALYZER" && id !== "MANY_INSECURE_REQUESTS" && id !== "THIRD_PARTY_FORM_WRITE") return 1;
+    if (toolName === "CONTENT_ANALYZER") return 3;
+    return 2;
+  }
+
+  function applyScoreFloors(score, evidence, policy) {
+    const floors = policy.scoreFloors || {};
+    const evidenceFloor = evidence.reduce((maximum, item) => {
+      const floor = Number(floors[item.id]);
+      return Number.isFinite(floor) ? Math.max(maximum, floor) : maximum;
+    }, 0);
+    return Math.max(score, evidenceFloor);
   }
 
   function levelFromScore(score, policy) {
@@ -446,6 +510,8 @@
       ...policy,
       thresholds: { ...DEFAULT_POLICY.thresholds, ...(policy.thresholds || {}) },
       weights: { ...(DEFAULT_POLICY.weights || {}), ...(policy.weights || {}) },
+      priorities: { ...(DEFAULT_POLICY.priorities || {}), ...(policy.priorities || {}) },
+      scoreFloors: { ...(DEFAULT_POLICY.scoreFloors || {}), ...(policy.scoreFloors || {}) },
       combiner: { ...DEFAULT_POLICY.combiner, ...(policy.combiner || {}) }
     };
   }

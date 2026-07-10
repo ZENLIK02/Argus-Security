@@ -55,6 +55,13 @@
     "play-store", "google-play", "galaxy-store", "apk", "support-secure"
   ];
 
+  const MULTI_LABEL_SUFFIXES = new Set([
+    "co.th", "or.th", "go.th", "ac.th", "in.th",
+    "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "org.au",
+    "co.jp", "co.kr", "com.sg", "com.my", "co.nz",
+    "github.io", "pages.dev", "vercel.app", "netlify.app", "appspot.com", "cloudfront.net"
+  ]);
+
   function normalizeText(value) {
     return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -105,7 +112,23 @@
       return false;
     }
 
-    return domain === otherDomain || domain.endsWith(`.${otherDomain}`) || otherDomain.endsWith(`.${domain}`);
+    if (domain === otherDomain || domain.endsWith(`.${otherDomain}`) || otherDomain.endsWith(`.${domain}`)) {
+      return true;
+    }
+
+    return getSiteDomain(domain) === getSiteDomain(otherDomain);
+  }
+
+  function getSiteDomain(domain) {
+    const hostname = String(domain || "").toLowerCase().replace(/^\.+|\.+$/g, "");
+    if (!hostname || hostname === "localhost" || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || hostname.includes(":")) {
+      return hostname;
+    }
+
+    const labels = hostname.split(".");
+    if (labels.length <= 2) return hostname;
+    const suffix = labels.slice(-2).join(".");
+    return MULTI_LABEL_SUFFIXES.has(suffix) ? labels.slice(-3).join(".") : suffix;
   }
 
   function isTrustedDomain(domain) {
@@ -162,6 +185,25 @@
       input.getAttribute("aria-label"),
       input.getAttribute("title")
     ].filter(Boolean).join(" "));
+  }
+
+  function getSensitiveFieldKind(input) {
+    const type = normalizeText(input.type || input.tagName);
+    const surface = getInputSurface(input);
+
+    if (type === "password" || /current-password|new-password|password|passwd|passcode/.test(surface)) {
+      return "password";
+    }
+    if (/one-time-code|otp|verification|security code|auth code|device[_\s-]?check|\bpin\b/.test(surface)) {
+      return "verification";
+    }
+    if (/credit|card number|cardnumber|cvc|cvv|payment|bank account|routing|wallet/.test(surface)) {
+      return "payment";
+    }
+    if (/recovery|seed phrase|secret|private key|access phrase|token|vault key/.test(surface)) {
+      return "secret";
+    }
+    return "";
   }
 
   function getScriptSurface(script) {
@@ -319,16 +361,18 @@
     let otpOrPaymentCrossDomainForm = false;
     let passwordHttpForm = false;
     let otpOrPaymentHttpForm = false;
+    let sensitiveFormCount = 0;
+    let sameOriginSensitiveHttpForm = false;
+    let httpPageWithSensitiveForm = false;
     const evasiveBehaviorSignals = extractEvasiveBehaviorSignals(forms, links, buttons, iframes, scripts, currentDomain);
 
     forms.forEach((form) => {
       const rawAction = (form.getAttribute("action") || "").trim();
       if (!rawAction) {
         emptyFormActionCount += 1;
-        return;
       }
 
-      const actionMeta = getUrlMetadata(rawAction);
+      const actionMeta = getUrlMetadata(rawAction || window.location.href);
       if (!actionMeta.sanitizedUrl) {
         return;
       }
@@ -338,15 +382,14 @@
       const isHttpAction = actionMeta.protocol === "http:";
       const isCrossDomainAction = actionMeta.hostname && !isSameSiteDomain(currentDomain, actionMeta.hostname);
       const formInputs = Array.from(form.querySelectorAll("input, textarea, select"));
-      const hasPasswordInForm = formInputs.some((input) => normalizeText(input.type) === "password");
-      const hasOtpPaymentBankField = formInputs.some((input) => {
-        const surface = getInputSurface(input);
-        return (
-          collectKeywordMatches(surface, KEYWORDS.otp).length > 0 ||
-          collectKeywordMatches(surface, KEYWORDS.banking).length > 0 ||
-          /card|credit|payment|deposit|amount|wallet|bank|บัญชี|ฝาก|ถอน|โอน/i.test(surface)
-        );
-      });
+      const sensitiveKinds = formInputs.map(getSensitiveFieldKind).filter(Boolean);
+      const hasPasswordInForm = sensitiveKinds.includes("password");
+      const hasOtpPaymentBankField = sensitiveKinds.some((kind) => kind === "verification" || kind === "payment");
+      const hasSensitiveField = sensitiveKinds.length > 0;
+
+      if (hasSensitiveField) {
+        sensitiveFormCount += 1;
+      }
 
       if (isHttpAction) {
         httpFormActionCount += 1;
@@ -360,6 +403,8 @@
 
       passwordHttpForm = passwordHttpForm || (isHttpAction && hasPasswordInForm);
       otpOrPaymentHttpForm = otpOrPaymentHttpForm || (isHttpAction && hasOtpPaymentBankField);
+      sameOriginSensitiveHttpForm = sameOriginSensitiveHttpForm || (isHttpAction && !isCrossDomainAction && hasSensitiveField);
+      httpPageWithSensitiveForm = httpPageWithSensitiveForm || (window.location.protocol === "http:" && hasSensitiveField);
     });
 
     const hiddenInputCount = Array.from(document.querySelectorAll("input[type='hidden'], input[hidden]")).length;
@@ -391,6 +436,7 @@
 
     return {
       formCount: forms.length,
+      sensitiveFormCount,
       formActionUrls: unique(formActionUrls).slice(0, 30),
       emptyFormActionCount,
       httpFormActionCount,
@@ -399,6 +445,8 @@
       otpOrPaymentCrossDomainForm,
       passwordHttpForm,
       otpOrPaymentHttpForm,
+      sameOriginSensitiveHttpForm,
+      httpPageWithSensitiveForm,
       hiddenInputCount,
       hiddenIframeCount,
       externalScriptCount: externalScripts.length,
@@ -558,6 +606,7 @@
       url,
       domain,
       pathname,
+      pageProtocol: parsedUrl.protocol,
       isSearchEnginePage: isSearchEnginePage(url, domain, pathname),
       isTrustedDomain: isTrustedDomain(domain),
       passwordFieldCount: passwordFields.length,
@@ -608,15 +657,28 @@
   function installPageEventListeners() {
     document.addEventListener("focusin", (event) => {
       const target = event.target;
-      if (target && target.tagName === "INPUT" && normalizeText(target.type) === "password") {
-        sendPageEvent(PASSWORD_FOCUS_MESSAGE);
+      const sensitiveKind = target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ? getSensitiveFieldKind(target) : "";
+      if (sensitiveKind) {
+        sendPageEvent(PASSWORD_FOCUS_MESSAGE, { sensitiveKind });
       }
     }, true);
 
     document.addEventListener("submit", (event) => {
       const form = event.target;
       const action = form && form.getAttribute ? sanitizeUrl(form.getAttribute("action") || window.location.href) : "";
-      sendPageEvent(FORM_SUBMITTED_MESSAGE, { formActionUrl: action });
+      const actionMeta = getUrlMetadata(action || window.location.href);
+      const fields = form && form.querySelectorAll ? Array.from(form.querySelectorAll("input, textarea, select")) : [];
+      const sensitiveKinds = fields.map(getSensitiveFieldKind).filter(Boolean);
+      sendPageEvent(FORM_SUBMITTED_MESSAGE, {
+        formActionUrl: action,
+        formMethod: normalizeText(form && form.method || "get").toUpperCase(),
+        actionProtocol: actionMeta.protocol,
+        isCrossDomainAction: Boolean(actionMeta.hostname && !isSameSiteDomain(window.location.hostname, actionMeta.hostname)),
+        hasSensitiveFields: sensitiveKinds.length > 0,
+        hasPasswordField: sensitiveKinds.includes("password"),
+        hasOtpOrPaymentField: sensitiveKinds.some((kind) => kind === "verification" || kind === "payment"),
+        sensitiveFieldCount: sensitiveKinds.length
+      });
     }, true);
 
     document.addEventListener("click", (event) => {
@@ -785,7 +847,8 @@
     panel.classList.add(riskClass);
     panel.querySelector(".argus-scan-detail-level").textContent = level;
     panel.querySelector(".argus-scan-detail-score").textContent = `${score}/100`;
-    panel.querySelector(".argus-scan-detail-source").textContent = `Analysis source: ${source}`;
+    const tier = risk.decisionTier ? ` | ${risk.decisionTier.replaceAll("_", " ").toLowerCase()}` : "";
+    panel.querySelector(".argus-scan-detail-source").textContent = `Analysis source: ${source}${tier}`;
     panel.querySelector(".argus-scan-detail-reasons").replaceChildren(
       ...reasons.slice(0, 6).map((reason) => {
         const item = document.createElement("li");
@@ -881,7 +944,8 @@
     appendText(scoreRow, "span", "argus-warning-score-label", risk.category || "UNKNOWN");
     appendText(scoreRow, "strong", "argus-warning-score", `${getRiskScore(risk)}/100`);
     if (Number.isFinite(Number(risk.confidence))) {
-      appendText(card, "p", "argus-warning-message", `Detection confidence: ${Math.round(Number(risk.confidence) * 100)}% · Policy ${risk.policyVersion || "local"}`);
+      const tier = risk.decisionTier ? ` · ${risk.decisionTier.replaceAll("_", " ")}` : "";
+      appendText(card, "p", "argus-warning-message", `Detection confidence: ${Math.round(Number(risk.confidence) * 100)}% · Policy ${risk.policyVersion || "local"}${tier}`);
     }
 
     const reasonsTitle = appendText(card, "div", "argus-warning-reasons-title", "Top reasons");

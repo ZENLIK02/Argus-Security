@@ -9,7 +9,9 @@ try {
     "popup.js",
     "options.js",
     "engine/argus_engine.js",
-    "tests/run_detector_tests.js"
+    "tests/run_detector_tests.js",
+    "tests/run_exfiltration_calibration.js",
+    "scripts/generate_exfiltration_corpus.js"
   )
 
   foreach ($file in $javascriptFiles) {
@@ -20,13 +22,16 @@ try {
   node tests/run_detector_tests.js
   if ($LASTEXITCODE -ne 0) { throw "Detector regression suite failed." }
 
+  node tests/run_exfiltration_calibration.js
+  if ($LASTEXITCODE -ne 0) { throw "Exfiltration calibration suite failed." }
+
   $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
   $pythonPath = if ($pythonCommand) { $pythonCommand.Source } else { Join-Path $project "backend/venv/Scripts/python.exe" }
   if (-not (Test-Path -LiteralPath $pythonPath)) {
     throw "Python was not found. Install Python or create backend/venv first."
   }
 
-  foreach ($file in @("manifest.json", "trusted_domains.json", "risky_categories.json", "engine/detection_policy.json")) {
+  foreach ($file in @("manifest.json", "trusted_domains.json", "risky_categories.json", "engine/detection_policy.json", "datasets/exfiltration_eval_cases.json")) {
     & $pythonPath -m json.tool $file | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "JSON validation failed: $file" }
   }

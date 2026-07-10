@@ -1,6 +1,6 @@
 # Project Argus Architecture
 
-Project Argus 2.0 is a local, evidence-based browser security engine. It does not call an external AI service. The Chrome extension is the authoritative detector; the FastAPI process is an optional static demo server and compatibility endpoint.
+Project Argus 3.0 is a local, evidence-based browser security engine. It does not call an external AI service. The Chrome extension is the authoritative detector; the FastAPI process is an optional static demo server and compatibility endpoint.
 
 ## Data Flow
 
@@ -22,6 +22,7 @@ Every analyzer produces evidence with the same fields:
   "id": "PASSWORD_CROSS_DOMAIN",
   "tool": "FORM_ANALYZER",
   "category": "DATA_EXFILTRATION",
+  "priority": 1,
   "points": 65,
   "confidence": 0.96,
   "severity": "critical",
@@ -38,17 +39,19 @@ The engine currently runs these tools:
 - Script Intent Analyzer: endpoint assembly, guarded sends, popup relays, clipboard/file metadata, and JavaScript form sinks.
 - Download Analyzer: real APK hrefs, third-party APKs, and insecure APK delivery.
 - Content Analyzer: gambling, adult content, scam language, aggressive ads, and popup abuse.
-- Network Analyzer: third-party activity after credential/form interaction and post-submit redirects/downloads.
+- Network Analyzer: write methods, insecure HTTP transport, cross-domain destinations, beacons/pings, query-bearing image requests, and post-submit timing.
 - Decision Combiner: high-confidence combinations that are stronger than an isolated signal.
 
 ## Score Calibration
 
-Evidence points are multiplied by confidence. Repeated evidence in one category receives diminishing weight, and secondary categories contribute only a fraction of their score. This prevents many weak keywords from automatically becoming `100/100`.
+Evidence points are multiplied by confidence. Repeated evidence in one category receives diminishing weight, and secondary categories contribute only a fraction of their score. Score floors guarantee that directly observed unprotected sensitive transfers cannot be diluted by weaker observations.
 
 - `0-34`: SAFE
 - `35-69`: SUSPICIOUS
 - `70-100`: HIGH_RISK
-- Adult or gambling evidence alone is capped at 55 and classified as `CONTENT_RISK`.
+- Priority 1, `OBSERVED_DATA_FLOW`: unencrypted sensitive writes, cross-domain sensitive writes, beacon-like transfer after sensitive interaction, and direct unsafe sensitive form actions.
+- Priority 2, `CONTEXT_OR_INTENT`: HTTP/domain/OTP/login metadata, static script sinks, endpoint assembly, and suspicious download context.
+- Priority 3, `CONTENT_CATEGORY`: adult, gambling, image-heavy advertising, and content keywords. Content-only results are capped at 12 and remain SAFE.
 - Trusted domains are capped at 20 unless decisive behavior is present.
 - Search result pages are SAFE unless decisive behavior is present.
 - A SAFE result always uses the SAFE category even if a weak observation was recorded.
@@ -60,7 +63,9 @@ Evidence points are multiplied by confidence. Repeated evidence in one category 
 The service worker keeps a privacy-safe 30-second event window per tab. It records event types and timestamps only, then correlates patterns such as:
 
 ```text
-password focus -> third-party requests
+password/OTP/secret focus -> third-party requests
+HTTP sensitive form -> unencrypted write request
+form submit -> single cross-domain write or beacon
 form submit -> third-party requests -> cross-domain redirect
 form submit -> download click
 ```
@@ -75,6 +80,7 @@ Run the detector regression suite with:
 
 ```powershell
 node tests/run_detector_tests.js
+node tests/run_exfiltration_calibration.js
 ```
 
-The suite covers safe pages, trusted/search false-positive guards, fake stores, fake banks, content-only risk, insecure and cross-domain forms, temporal exfiltration, aggressive advertising, and the three evasive test-only scenarios.
+The suites cover 15 legacy regressions and a 65-case exfiltration calibration corpus. The corpus is derived from browser-observable portions of MITRE ATT&CK, OWASP, NIST TLS guidance, CIC-Bell-DNS-EXF-2021, CIC-IDS2017, UNSW-NB15, and CTU-13. Full PCAP payload inspection is outside a Chrome extension's visibility boundary.

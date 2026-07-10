@@ -9,6 +9,7 @@ Safety note: these pages do not send typed user values anywhere. Any network-sty
 - `quiet-profile-sync.html`: looks like a normal profile sync form, but simulates delayed credential relay through JavaScript-built endpoints.
 - `consent-mirror.html`: looks like a productivity access page, but simulates a consent and popup-message trap.
 - `clipboard-vault.html`: looks like a recovery vault page, but simulates clipboard/file metadata harvesting.
+- `network-plaintext-demo.html`: sends fixed dummy password and OTP values to the local FastAPI demo endpoint over HTTP. It is designed for Argus and Wireshark verification and never stores the payload.
 
 Run them with a local server, for example:
 
@@ -24,3 +25,13 @@ http://localhost:8080/Website_testonly/quiet-profile-sync.html
 http://localhost:8080/Website_testonly/consent-mirror.html
 http://localhost:8080/Website_testonly/clipboard-vault.html
 ```
+
+The plaintext network demo uses the FastAPI server because it needs a local POST endpoint:
+
+```powershell
+cd Desktop/Project-Argus-Extension/backend
+venv\Scripts\activate
+uvicorn main:app --reload --port 8000
+```
+
+Then open `http://localhost:8000/Website_testonly/network-plaintext-demo.html`. Argus should show HIGH_RISK before submission because the sensitive form uses HTTP. After clicking the dummy submit button, the evidence should also include an observed unencrypted write request.

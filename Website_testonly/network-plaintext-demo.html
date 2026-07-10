@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Plaintext Network Capture Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080d16;
+      --panel: #101827;
+      --border: #29364d;
+      --text: #f5f8ff;
+      --muted: #aab8cf;
+      --danger: #ff4d67;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    main {
+      width: min(560px, calc(100vw - 32px));
+      border: 1px solid var(--border);
+      border-top: 4px solid var(--danger);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 28px;
+    }
+    h1 { margin: 0 0 10px; font-size: 25px; }
+    p { color: var(--muted); line-height: 1.55; }
+    form { display: grid; gap: 14px; margin-top: 22px; }
+    label { display: grid; gap: 7px; font-weight: 700; }
+    input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #0a1120;
+      color: var(--text);
+      padding: 11px 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 6px;
+      background: var(--danger);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 800;
+      padding: 12px 16px;
+    }
+    code { color: #7ee7ff; }
+    #status { min-height: 20px; margin: 2px 0 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Plaintext Network Capture Demo</h1>
+    <p>This test sends fixed dummy values to <code>/demo-collect</code> over localhost HTTP. Do not enter real credentials. A packet capture can see the dummy form body because HTTP does not encrypt it.</p>
+
+    <form id="demoForm" action="/demo-collect" method="post" autocomplete="off">
+      <label>
+        Demo password
+        <input name="demo_password" type="password" value="ARGUS-DEMO-NOT-REAL" readonly>
+      </label>
+      <label>
+        Demo OTP
+        <input name="demo_otp" inputmode="numeric" autocomplete="one-time-code" value="123456" readonly>
+      </label>
+      <button type="submit">Send dummy HTTP request</button>
+      <p id="status" aria-live="polite"></p>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("demoForm");
+    const status = document.getElementById("status");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      status.textContent = "Sending dummy payload...";
+
+      try {
+        const response = await fetch(form.action, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(new FormData(form))
+        });
+        const result = await response.json();
+        status.textContent = `${result.message} Bytes received: ${result.receivedBytes}.`;
+      } catch (error) {
+        status.textContent = "Demo server did not respond. Start FastAPI on port 8000.";
+      }
+    });
+  </script>
+</body>
+</html>
