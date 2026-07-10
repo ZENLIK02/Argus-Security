@@ -1,6 +1,6 @@
 # Project Argus Local Demo Server
 
-This FastAPI server is optional. It does not call any external AI API.
+This FastAPI server is optional. It does not call any external AI API. The Chrome extension and its versioned JavaScript evidence engine are the authoritative detector; `/analyze` is retained only as a local compatibility endpoint.
 
 Use it when you want an easy local URL for the demo test pages:
 

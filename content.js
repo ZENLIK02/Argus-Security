@@ -880,6 +880,9 @@
     card.appendChild(scoreRow);
     appendText(scoreRow, "span", "argus-warning-score-label", risk.category || "UNKNOWN");
     appendText(scoreRow, "strong", "argus-warning-score", `${getRiskScore(risk)}/100`);
+    if (Number.isFinite(Number(risk.confidence))) {
+      appendText(card, "p", "argus-warning-message", `Detection confidence: ${Math.round(Number(risk.confidence) * 100)}% · Policy ${risk.policyVersion || "local"}`);
+    }
 
     const reasonsTitle = appendText(card, "div", "argus-warning-reasons-title", "Top reasons");
     reasonsTitle.id = "argus-warning-reasons-title";

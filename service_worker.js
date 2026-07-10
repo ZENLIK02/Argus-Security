@@ -1,3 +1,9 @@
+try {
+  importScripts("engine/argus_engine.js");
+} catch (error) {
+  console.error("[Project Argus] modular engine failed to load; legacy detector will be used.", error);
+}
+
 const SCAN_MESSAGE = "ARGUS_PAGE_SCAN";
 const WARNING_MESSAGE = "ARGUS_SHOW_WARNING";
 const GET_LATEST_MESSAGE = "ARGUS_GET_LATEST_SCAN";
@@ -8,6 +14,7 @@ const PASSWORD_FOCUS_MESSAGE = "ARGUS_PASSWORD_FIELD_FOCUSED";
 const FORM_SUBMITTED_MESSAGE = "ARGUS_FORM_SUBMITTED";
 const DOWNLOAD_CLICKED_MESSAGE = "ARGUS_DOWNLOAD_CLICKED";
 const SETTINGS_KEY = "argusSettings";
+const TEMPORAL_WINDOW_MS = 30000;
 
 const CONTENT_RISK_MIN_SCORE = 35;
 
@@ -27,6 +34,7 @@ const DEFAULT_SETTINGS = {
 
 let trustedDomainsCache = null;
 let riskyCategoriesCache = null;
+let detectionPolicyCache = null;
 const tabNetworkSignals = new Map();
 const tabPageDomains = new Map();
 
@@ -95,7 +103,7 @@ function initializeNetworkMonitoring() {
   if (chrome.tabs && chrome.tabs.onUpdated) {
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (changeInfo.status === "loading") {
-        tabNetworkSignals.delete(tabId);
+        preserveOrClearTemporalState(tabId);
         tabPageDomains.delete(tabId);
       }
     });
@@ -138,9 +146,15 @@ function recordNetworkRequest(details) {
   }
   if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < 15000 && isThirdParty) {
     signals.requestsAfterFormSubmit += 1;
+    addTimelineEvent(signals, "THIRD_PARTY_AFTER_FORM", now);
   }
   if (signals.lastPasswordFocusAt && now - signals.lastPasswordFocusAt < 15000 && isThirdParty) {
     signals.requestsAfterPasswordFocus += 1;
+    addTimelineEvent(signals, "THIRD_PARTY_AFTER_PASSWORD", now);
+  }
+  if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < TEMPORAL_WINDOW_MS && isThirdParty && details.type === "main_frame") {
+    signals.formSubmitThenCrossDomainRedirectCount += 1;
+    addTimelineEvent(signals, "CROSS_DOMAIN_REDIRECT_AFTER_FORM", now);
   }
   if (isThirdParty && isSuspiciousRequestType(details.type)) {
     addLimited(signals.suspiciousRequestDomains, requestMeta.hostname, 30);
@@ -160,12 +174,18 @@ function recordPageEvent(type, payload, sender) {
   const now = Date.now();
   if (type === PASSWORD_FOCUS_MESSAGE) {
     signals.lastPasswordFocusAt = now;
+    addTimelineEvent(signals, "PASSWORD_FOCUS", now);
   }
   if (type === FORM_SUBMITTED_MESSAGE) {
     signals.lastFormSubmitAt = now;
+    addTimelineEvent(signals, "FORM_SUBMIT", now);
   }
   if (type === DOWNLOAD_CLICKED_MESSAGE) {
     signals.downloadClickCount += 1;
+    if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < TEMPORAL_WINDOW_MS) {
+      signals.downloadAfterFormSubmitCount += 1;
+    }
+    addTimelineEvent(signals, "DOWNLOAD_CLICK", now);
   }
   signals.updatedAt = now;
   tabNetworkSignals.set(tabId, signals);
@@ -188,6 +208,9 @@ function getNetworkSignals(tabId) {
     requestsAfterFormSubmit: 0,
     requestsAfterPasswordFocus: 0,
     downloadClickCount: 0,
+    formSubmitThenCrossDomainRedirectCount: 0,
+    downloadAfterFormSubmitCount: 0,
+    recentEvents: [],
     lastFormSubmitAt: 0,
     lastPasswordFocusAt: 0,
     updatedAt: Date.now()
@@ -205,8 +228,51 @@ function exportNetworkSignals(tabId) {
     insecureHttpRequests: signals.insecureHttpRequests,
     requestsAfterFormSubmit: signals.requestsAfterFormSubmit,
     requestsAfterPasswordFocus: signals.requestsAfterPasswordFocus,
-    suspiciousRequestDomains: signals.suspiciousRequestDomains.slice(0, 30)
+    suspiciousRequestDomains: signals.suspiciousRequestDomains.slice(0, 30),
+    temporalSignals: {
+      formSubmitThenThirdPartyCount: signals.requestsAfterFormSubmit,
+      passwordFocusThenThirdPartyCount: signals.requestsAfterPasswordFocus,
+      formSubmitThenCrossDomainRedirectCount: signals.formSubmitThenCrossDomainRedirectCount,
+      downloadAfterFormSubmitCount: signals.downloadAfterFormSubmitCount,
+      recentEventTypes: signals.recentEvents
+        .filter((event) => Date.now() - event.at <= TEMPORAL_WINDOW_MS)
+        .map((event) => event.type)
+        .slice(-20)
+    }
   };
+}
+
+function addTimelineEvent(signals, type, at) {
+  signals.recentEvents = Array.isArray(signals.recentEvents) ? signals.recentEvents : [];
+  signals.recentEvents.push({ type, at });
+  signals.recentEvents = signals.recentEvents
+    .filter((event) => at - event.at <= TEMPORAL_WINDOW_MS)
+    .slice(-40);
+}
+
+function preserveOrClearTemporalState(tabId) {
+  const signals = tabNetworkSignals.get(tabId);
+  const now = Date.now();
+  if (!signals || (!signals.lastFormSubmitAt && !signals.lastPasswordFocusAt)) {
+    tabNetworkSignals.delete(tabId);
+    return;
+  }
+
+  const lastInteraction = Math.max(signals.lastFormSubmitAt || 0, signals.lastPasswordFocusAt || 0);
+  if (now - lastInteraction > TEMPORAL_WINDOW_MS) {
+    tabNetworkSignals.delete(tabId);
+    return;
+  }
+
+  signals.totalRequests = 0;
+  signals.thirdPartyRequests = 0;
+  signals.thirdPartyScriptRequests = 0;
+  signals.thirdPartyFrameRequests = 0;
+  signals.thirdPartyXHRRequests = 0;
+  signals.insecureHttpRequests = 0;
+  signals.suspiciousRequestDomains = [];
+  signals.updatedAt = now;
+  tabNetworkSignals.set(tabId, signals);
 }
 
 async function handlePageScan(pageData, sender) {
@@ -214,16 +280,19 @@ async function handlePageScan(pageData, sender) {
   const settings = await loadSettings();
   const trustedDomains = await loadTrustedDomains();
   const riskyCategories = await loadRiskyCategories();
+  const detectionPolicy = await loadDetectionPolicy();
   const signals = normalizeSignals(pageData, trustedDomains);
   if (tabId) {
     tabPageDomains.set(tabId, signals.domain);
     signals.networkSignals = exportNetworkSignals(tabId);
   }
-  const ruleRisk = calculateRuleRisk(signals, riskyCategories);
+  const ruleRisk = calculateRuleRisk(signals, riskyCategories, detectionPolicy);
   const modelStatus = {
     mode: "LOCAL_MODEL",
     externalAi: false,
-    message: "Project Argus local model active."
+    engine: "ARGUS_EVIDENCE_ENGINE",
+    policyVersion: detectionPolicy.version || "2.0.0",
+    message: "Project Argus modular evidence engine active."
   };
 
   const finalRisk = {
@@ -237,6 +306,7 @@ async function handlePageScan(pageData, sender) {
 
   const scanResult = {
     ...signals,
+    timestamp: new Date().toISOString(),
     tabId,
     risk: finalRisk,
     ruleBasedRisk: ruleRisk,
@@ -250,6 +320,8 @@ async function handlePageScan(pageData, sender) {
       ruleScore: ruleRisk.score,
       finalScore: finalRisk.score,
       finalLevel: finalRisk.level,
+      confidence: finalRisk.confidence,
+      policyVersion: finalRisk.policyVersion,
       model: "LOCAL_MODEL",
       warningThreshold: settings.warningThreshold
     }
@@ -294,6 +366,16 @@ async function loadRiskyCategories() {
 
   riskyCategoriesCache = await fetchJson("risky_categories.json", { categories: [] });
   return riskyCategoriesCache;
+}
+
+async function loadDetectionPolicy() {
+  if (detectionPolicyCache) {
+    return detectionPolicyCache;
+  }
+
+  const fallbackPolicy = typeof ArgusEngine !== "undefined" ? ArgusEngine.DEFAULT_POLICY : {};
+  detectionPolicyCache = await fetchJson("engine/detection_policy.json", fallbackPolicy);
+  return detectionPolicyCache;
 }
 
 async function fetchJson(path, fallback) {
@@ -472,7 +554,16 @@ function normalizeNetworkSignals(value) {
   };
 }
 
-function calculateRuleRisk(signals, categoryConfig) {
+function calculateRuleRisk(signals, categoryConfig, detectionPolicy) {
+  if (typeof ArgusEngine !== "undefined" && ArgusEngine.evaluate) {
+    return ArgusEngine.evaluate(signals, categoryConfig, detectionPolicy);
+  }
+
+  console.warn("[Project Argus] modular engine unavailable; using legacy local detector.");
+  return calculateLegacyRuleRisk(signals, categoryConfig);
+}
+
+function calculateLegacyRuleRisk(signals, categoryConfig) {
   const reasons = [];
   const categoryScores = {};
   const configuredCategoryIds = new Set((categoryConfig.categories || []).map((category) => category.id));

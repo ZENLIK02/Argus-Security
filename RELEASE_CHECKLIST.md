@@ -19,12 +19,16 @@ Run this before rebuilding the ZIP for submission or presentation.
 - [ ] `manifest.json` is valid JSON.
 - [ ] `trusted_domains.json` is valid JSON.
 - [ ] `risky_categories.json` is valid JSON.
+- [ ] `engine/detection_policy.json` is valid JSON.
 - [ ] JavaScript files pass syntax check:
   - `content.js`
   - `service_worker.js`
   - `popup.js`
   - `options.js`
+  - `engine/argus_engine.js`
+  - `tests/run_detector_tests.js`
 - [ ] `backend/main.py` compiles.
+- [ ] `node tests/run_detector_tests.js` passes every case.
 - [ ] Test pages return expected results:
   - `safe-site.html`: SAFE
   - `fake-store.html`: HIGH_RISK
@@ -42,9 +46,13 @@ Run this before rebuilding the ZIP for submission or presentation.
   - `Website_testonly/clipboard-vault.html`: HIGH_RISK / DATA_EXFILTRATION
 - [ ] Google Search, YouTube, Roblox, and Yahoo Finance remain SAFE.
 - [ ] Popup source shows `LOCAL_MODEL`.
+- [ ] Popup displays confidence, policy version, and analyzer evidence.
 
 ## Packaging
 
+- [ ] `scripts/validate.ps1` completes successfully.
+- [ ] `scripts/build_zip.ps1` completes successfully.
 - [ ] `Project-Argus-Extension.zip` builds successfully.
 - [ ] ZIP contains extension files, local demo server source, docs, and test pages.
+- [ ] ZIP contains `engine/`, `tests/`, and `ARCHITECTURE.md`.
 - [ ] ZIP does not contain secrets or local virtual environment files.

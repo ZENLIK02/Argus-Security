@@ -110,6 +110,30 @@
       padding-top: 14px;
     }
 
+    .analyzer-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .analyzer-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 10px;
+      border-left: 2px solid var(--panel-border);
+      padding: 6px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .analyzer-item[data-status="FINDINGS"] {
+      border-left-color: var(--suspicious);
+    }
+
+    .analyzer-item strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
     .guard-title {
       margin: 0 0 10px;
       font-size: 13px;
@@ -213,9 +237,15 @@
     <p id="source" class="meta-line">Source: waiting</p>
     <p id="trusted" class="meta-line">Trusted domain: waiting</p>
     <p id="model" class="meta-line">Model: waiting</p>
+    <p id="confidence" class="meta-line">Confidence: waiting</p>
+    <p id="policy" class="meta-line">Policy: waiting</p>
     <div class="guard-section" aria-label="Data Leak Guard">
       <p class="guard-title">Data Leak Guard</p>
       <div id="guardGrid" class="guard-grid"></div>
+    </div>
+    <div class="guard-section" aria-label="Analyzer evidence">
+      <p class="guard-title">Analyzer Evidence</p>
+      <div id="analyzerList" class="analyzer-list"></div>
     </div>
     <ul id="reasons"></ul>
     <p id="empty" class="empty" hidden>No scan has been recorded for this tab yet. Refresh the page and open this popup again.</p>

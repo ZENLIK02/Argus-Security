@@ -155,6 +155,15 @@
       "recommendedAction": "Show high-risk impersonation warning."
     },
     {
+      "id": "SUSPICIOUS_DOWNLOAD",
+      "displayName": "Suspicious Download Sequence",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": ["download after submit", "automatic download", "unexpected file"],
+      "urlPatterns": ["download", "get-file", "delivery"],
+      "signals": ["download after form submission", "cross-domain redirect before download", "unexpected download interaction"],
+      "recommendedAction": "Warn when a download follows a sensitive interaction or unexpected redirect."
+    },
+    {
       "id": "UNKNOWN_SENSITIVE_FORM",
       "displayName": "Unknown Sensitive Form",
       "riskLevel": "SUSPICIOUS",

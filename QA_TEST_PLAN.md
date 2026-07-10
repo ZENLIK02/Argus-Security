@@ -2,6 +2,17 @@
 
 Use this checklist before a demo or submission. Project Argus now uses the local detector/model only. There is no external AI call and no API key.
 
+## Automated Regression Gate
+
+Run before manual browser QA:
+
+```powershell
+cd Desktop/Project-Argus-Extension
+node tests/run_detector_tests.js
+```
+
+Expected: every detector case passes under policy `2.0.0`. A failed SAFE, score range, category, tool-result, or confidence assertion blocks release.
+
 ## Setup
 
 1. Open Chrome and go to `chrome://extensions`.
@@ -63,5 +74,7 @@ These pages are intentionally designed to be hard for Argus to catch. They shoul
 - SAFE trusted/search pages do not show warning overlays.
 - HIGH_RISK demo pages show clear warning overlays.
 - Popup source shows `LOCAL_MODEL`.
+- Popup shows policy `2.0.0`, decision confidence, and analyzer results.
+- Automated detector regression suite passes completely.
 - Adult/gambling category pages stay below HIGH_RISK unless data-leak, credential, APK, or insecure form behavior is present.
 - Exported report contains only metadata and risk signals.

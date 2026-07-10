@@ -1,8 +1,10 @@
 # Project Argus Chrome Extension
 
-Project Argus is a Manifest V3 browser security prototype. It uses a local Project Argus detector/model only. There is no external AI call, no API key, and no external classification service.
+Project Argus is a Manifest V3 browser security prototype. Version 2.0 uses a modular local evidence engine only. There is no external AI call, API key, or external classification service.
 
-The detector is behavior-first. Adult or gambling keywords alone should normally stay `SUSPICIOUS / CONTENT_RISK`. Risk increases when a page combines category signals with concrete behavior such as cross-domain sensitive forms, HTTP form submission, third-party APK links, hidden iframes, fake install buttons, or third-party requests after form/password interaction.
+The detector is behavior-first. Seven analyzers produce evidence and confidence, then a calibrated decision engine combines them with diminishing weights. Adult or gambling keywords alone stay `SUSPICIOUS / CONTENT_RISK`; concrete behavior such as cross-domain sensitive forms, HTTP submission, suspicious scripts, APK delivery, or interaction-linked network activity can escalate the result.
+
+See `ARCHITECTURE.md` for analyzer contracts, score calibration, temporal correlation, privacy boundaries, and fallback behavior.
 
 ## Load The Extension
 
@@ -26,7 +28,7 @@ Options:
 - `Show badge on SAFE pages`: turn off for a quieter browsing demo.
 - `Demo mode`: keeps UI behavior stable for presentations and avoids repeated warning redraw flicker.
 
-The popup includes a `Data Leak Guard` section with metadata counts for cross-domain forms, HTTP form actions, hidden iframes, external scripts, third-party requests, requests after form submit/password focus, and APK link behavior.
+The popup includes `Data Leak Guard` metadata, overall decision confidence, policy version, and an `Analyzer Evidence` section showing which local tools produced findings.
 
 ## Optional Local Demo Server
 
@@ -95,34 +97,29 @@ http://localhost:8000/Website_testonly/clipboard-vault.html
 1. Open a page and wait for the Argus badge to show a score.
 2. Open the Project Argus popup.
 3. Click `Export Scan Report`.
-4. A JSON file downloads with timestamp, URL, domain, trusted/search status, final score, level, category, source, reasons, model status, data-leak metadata, and network metadata.
+4. A JSON file downloads with timestamp, URL, domain, trusted/search status, final score, level, category, confidence, policy version, analyzer evidence, source, reasons, data-leak metadata, and privacy-safe temporal network metadata.
 
 The export does not include passwords, OTP values, cookies, tokens, storage values, request bodies, headers, full page text, or private messages.
 
-## Rebuild ZIP
+## Automated Detector Tests
 
-PowerShell:
+Run the local regression suite after changing scoring, analyzers, or policy:
 
 ```powershell
-$project = "C:\Users\User\Desktop\Project-Argus-Extension"
-$zip = "C:\Users\User\Desktop\Project-Argus-Extension.zip"
-$stage = Join-Path $env:TEMP ("Project-Argus-Zip-" + [guid]::NewGuid().ToString())
-New-Item -ItemType Directory -Path $stage | Out-Null
-$stageRoot = Join-Path $stage "Project-Argus-Extension"
-New-Item -ItemType Directory -Path $stageRoot | Out-Null
-$rootFiles = @(
-  "manifest.json","content.js","service_worker.js","popup.html","popup.js",
-  "options.html","options.js","style.css","trusted_domains.json","risky_categories.json",
-  "README.md","PRIVACY_NOTES.md","QA_TEST_PLAN.md","RELEASE_CHECKLIST.md"
-)
-foreach ($file in $rootFiles) { Copy-Item -LiteralPath (Join-Path $project $file) -Destination $stageRoot }
-Copy-Item -LiteralPath (Join-Path $project "test-site") -Destination $stageRoot -Recurse
-New-Item -ItemType Directory -Path (Join-Path $stageRoot "backend") | Out-Null
-$backendFiles = @("main.py","requirements.txt","README_BACKEND.md")
-foreach ($file in $backendFiles) { Copy-Item -LiteralPath (Join-Path (Join-Path $project "backend") $file) -Destination (Join-Path $stageRoot "backend") }
-if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -Path $stageRoot -DestinationPath $zip -Force
-Remove-Item -LiteralPath $stage -Recurse -Force
+cd Desktop/Project-Argus-Extension
+node tests/run_detector_tests.js
+```
+
+All cases must pass before rebuilding the ZIP. The suite checks safe/trusted false-positive guards, fake stores, fake banks, content-only risk caps, sensitive forms, evasive script patterns, temporal exfiltration, and aggressive advertising.
+
+## Rebuild ZIP
+
+Validate and package with the included scripts:
+
+```powershell
+cd Desktop/Project-Argus-Extension
+powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
+powershell -ExecutionPolicy Bypass -File scripts/build_zip.ps1
 ```
 
 The ZIP must not include `backend/venv`, `__pycache__`, `.git`, or `node_modules`.

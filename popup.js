@@ -9,7 +9,10 @@ const categoryEl = document.getElementById("category");
 const sourceEl = document.getElementById("source");
 const trustedEl = document.getElementById("trusted");
 const modelEl = document.getElementById("model");
+const confidenceEl = document.getElementById("confidence");
+const policyEl = document.getElementById("policy");
 const guardGridEl = document.getElementById("guardGrid");
+const analyzerListEl = document.getElementById("analyzerList");
 const reasonsEl = document.getElementById("reasons");
 const emptyEl = document.getElementById("empty");
 const exportReportButton = document.getElementById("exportReport");
@@ -65,7 +68,10 @@ function showEmptyState(tab) {
   sourceEl.textContent = "Source: none yet";
   trustedEl.textContent = "Trusted domain: unknown";
   modelEl.textContent = "Model: local only";
+  confidenceEl.textContent = "Confidence: unknown";
+  policyEl.textContent = "Policy: unknown";
   renderDataLeakGuard(null);
+  renderAnalyzerResults(null);
   reasonsEl.replaceChildren();
   emptyEl.hidden = false;
   exportReportButton.disabled = true;
@@ -94,7 +100,10 @@ function renderScan(scan) {
   sourceEl.textContent = `Source: ${risk.source || scan.source || "LOCAL_MODEL"}`;
   trustedEl.textContent = `Trusted domain: ${scan.isTrustedDomain ? "true" : "false"}`;
   modelEl.textContent = `Model: ${getModelStatus(scan.modelStatus)}`;
+  confidenceEl.textContent = `Confidence: ${formatConfidence(risk.confidence)}`;
+  policyEl.textContent = `Policy: ${risk.policyVersion || "legacy"}`;
   renderDataLeakGuard(scan);
+  renderAnalyzerResults(scan);
 
   reasonsEl.replaceChildren();
   (risk.reasons || ["No detailed reasons were returned."]).forEach((reason) => {
@@ -122,6 +131,10 @@ function exportScanReport() {
     category: risk.category || "UNKNOWN",
     source: risk.source || latestScan.source || "UNKNOWN",
     reasons: Array.isArray(risk.reasons) ? risk.reasons : [],
+    confidence: normalizeConfidence(risk.confidence),
+    policyVersion: risk.policyVersion || null,
+    evidence: sanitizeEvidence(risk.evidence),
+    toolResults: sanitizeToolResults(risk.toolResults),
     modelStatus: latestScan.modelStatus || { mode: "LOCAL_MODEL", externalAi: false },
     dataLeakSignals: sanitizeDataLeakSignals(latestScan.dataLeakSignals),
     networkSignals: sanitizeNetworkSignals(latestScan.networkSignals)
@@ -134,6 +147,85 @@ function exportScanReport() {
   anchor.download = buildReportFilename(report);
   anchor.click();
   URL.revokeObjectURL(objectUrl);
+}
+
+function renderAnalyzerResults(scan) {
+  const tools = scan && scan.risk && Array.isArray(scan.risk.toolResults) ? scan.risk.toolResults : [];
+  analyzerListEl.replaceChildren();
+
+  if (tools.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "analyzer-item";
+    empty.textContent = "No analyzer results yet";
+    analyzerListEl.appendChild(empty);
+    return;
+  }
+
+  tools.forEach((result) => {
+    const item = document.createElement("div");
+    item.className = "analyzer-item";
+    item.dataset.status = result.status || "CLEAR";
+
+    const name = document.createElement("strong");
+    name.textContent = formatToolName(result.tool);
+    item.appendChild(name);
+
+    const score = document.createElement("span");
+    score.textContent = `${Number(result.score) || 0}/100`;
+    item.appendChild(score);
+
+    const status = document.createElement("span");
+    status.textContent = `${result.status || "CLEAR"} · ${Number(result.findingCount) || 0} finding(s)`;
+    item.appendChild(status);
+
+    const confidence = document.createElement("span");
+    confidence.textContent = formatConfidence(result.confidence);
+    item.appendChild(confidence);
+
+    analyzerListEl.appendChild(item);
+  });
+}
+
+function formatToolName(value) {
+  return String(value || "ANALYZER")
+    .replace(/_ANALYZER$/g, "")
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeConfidence(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : null;
+}
+
+function formatConfidence(value) {
+  const normalized = normalizeConfidence(value);
+  return normalized === null ? "unknown" : `${Math.round(normalized * 100)}%`;
+}
+
+function sanitizeEvidence(value) {
+  return Array.isArray(value) ? value.slice(0, 30).map((item) => ({
+    id: String(item.id || "").slice(0, 80),
+    tool: String(item.tool || "").slice(0, 80),
+    category: String(item.category || "").slice(0, 80),
+    points: Number(item.points) || 0,
+    confidence: normalizeConfidence(item.confidence),
+    severity: String(item.severity || "").slice(0, 20),
+    message: String(item.message || "").slice(0, 240),
+    decisive: Boolean(item.decisive)
+  })) : [];
+}
+
+function sanitizeToolResults(value) {
+  return Array.isArray(value) ? value.slice(0, 12).map((item) => ({
+    tool: String(item.tool || "").slice(0, 80),
+    score: Number(item.score) || 0,
+    confidence: normalizeConfidence(item.confidence),
+    status: String(item.status || "CLEAR").slice(0, 20),
+    findingCount: Number(item.findingCount) || 0,
+    topEvidence: Array.isArray(item.topEvidence) ? item.topEvidence.slice(0, 3).map((message) => String(message).slice(0, 240)) : []
+  })) : [];
 }
 
 async function clearLastScan() {
@@ -162,6 +254,8 @@ function renderDataLeakGuard(scan) {
     ["Third-party XHR/fetch", network.thirdPartyXHRRequests],
     ["After form submit", network.requestsAfterFormSubmit],
     ["After password focus", network.requestsAfterPasswordFocus],
+    ["Form-to-third-party", network.temporalSignals && network.temporalSignals.formSubmitThenThirdPartyCount],
+    ["Post-form redirects", network.temporalSignals && network.temporalSignals.formSubmitThenCrossDomainRedirectCount],
     ["Credential-like fields", dataLeak.credentialLikeTextFieldCount],
     ["Script network sinks", dataLeak.scriptNetworkSinkCount],
     ["Dynamic endpoints", dataLeak.dynamicEndpointAssemblyCount],
@@ -231,7 +325,14 @@ function sanitizeNetworkSignals(signals) {
     insecureHttpRequests: Number(raw.insecureHttpRequests) || 0,
     requestsAfterFormSubmit: Number(raw.requestsAfterFormSubmit) || 0,
     requestsAfterPasswordFocus: Number(raw.requestsAfterPasswordFocus) || 0,
-    suspiciousRequestDomains: Array.isArray(raw.suspiciousRequestDomains) ? raw.suspiciousRequestDomains.slice(0, 20) : []
+    suspiciousRequestDomains: Array.isArray(raw.suspiciousRequestDomains) ? raw.suspiciousRequestDomains.slice(0, 20) : [],
+    temporalSignals: {
+      formSubmitThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.formSubmitThenThirdPartyCount) || 0,
+      passwordFocusThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.passwordFocusThenThirdPartyCount) || 0,
+      formSubmitThenCrossDomainRedirectCount: Number(raw.temporalSignals && raw.temporalSignals.formSubmitThenCrossDomainRedirectCount) || 0,
+      downloadAfterFormSubmitCount: Number(raw.temporalSignals && raw.temporalSignals.downloadAfterFormSubmitCount) || 0,
+      recentEventTypes: Array.isArray(raw.temporalSignals && raw.temporalSignals.recentEventTypes) ? raw.temporalSignals.recentEventTypes.slice(-20) : []
+    }
   };
 }
 
