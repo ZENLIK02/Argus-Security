@@ -7,3 +7,4 @@ __pycache__/
 Thumbs.db
 node_modules/
 .env
+Website_testonly/

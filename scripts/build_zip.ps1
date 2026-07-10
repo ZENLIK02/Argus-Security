@@ -18,7 +18,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $project $file) -Destination $stageRoot
   }
 
-  foreach ($directory in @("test-site", "Website_testonly", "engine", "datasets", "tests", "scripts")) {
+  foreach ($directory in @("test-site", "engine", "datasets", "tests", "scripts")) {
     Copy-Item -LiteralPath (Join-Path $project $directory) -Destination $stageRoot -Recurse
   }
 

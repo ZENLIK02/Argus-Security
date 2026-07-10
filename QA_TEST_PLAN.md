@@ -50,17 +50,6 @@ uvicorn main:app --reload --port 8000
 | Roblox | `https://www.roblox.com` | SAFE | Trusted domain, no warning |
 | Yahoo Finance | `https://finance.yahoo.com` | SAFE | Finance/account words should not trigger phishing by themselves |
 
-## Adversarial Test-Only Cases
-
-These pages are intentionally designed to be hard for Argus to catch. They should be used for beta QA and detector improvement, not as normal demo pass/fail pages.
-
-| Test | URL / Page | Expected | Checks |
-| --- | --- | --- | --- |
-| Quiet profile sync | `http://localhost:8000/Website_testonly/quiet-profile-sync.html` | SUSPICIOUS / DATA_EXFILTRATION | Static intent stays below HIGH_RISK until an actual unsafe request is observed |
-| Consent mirror | `http://localhost:8000/Website_testonly/consent-mirror.html` | SUSPICIOUS / DATA_EXFILTRATION | Popup/postMessage plus network-send intent is supporting evidence, not proof of transfer |
-| Clipboard vault | `http://localhost:8000/Website_testonly/clipboard-vault.html` | SUSPICIOUS / DATA_EXFILTRATION | Clipboard/file metadata plus network-send intent stays below HIGH_RISK without an observed request |
-| Plaintext network demo | `http://localhost:8000/Website_testonly/network-plaintext-demo.html` | HIGH_RISK / INSECURE_FORM_SUBMISSION | Sensitive form over HTTP scores high; after dummy submit, evidence includes an observed unencrypted write |
-
 ## Export Report Test
 
 1. Open any test page.
