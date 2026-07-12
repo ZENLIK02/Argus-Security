@@ -73,6 +73,7 @@
     }
 
     input[type="url"],
+    select,
     input[type="number"] {
       width: 100%;
       border: 1px solid var(--border);
@@ -132,9 +133,43 @@
 
     <section class="panel">
       <div class="field">
-        <label for="warningThreshold">Warning threshold</label>
+        <label for="warningThreshold">Risk flag threshold</label>
         <input id="warningThreshold" type="number" min="0" max="100" step="1">
-        <div class="hint">Overlay warnings appear only when the final score is at or above this value and the page meets warning rules.</div>
+        <div class="hint">Retained for legacy/shadow report comparison. Evidence-first warnings require direct behavior and do not rely on this score threshold.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="progressiveScan" type="checkbox"> Progressive network observation</label>
+        <div class="hint">Shows OBSERVING first and waits before publishing the final decision.</div>
+      </div>
+
+      <div class="field">
+        <label for="observationWindowMs">Initial observation window (milliseconds)</label>
+        <input id="observationWindowMs" type="number" min="2000" max="10000" step="500">
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="sendFalsePositiveFeedback" type="checkbox"> Send false-positive reports to local collector</label>
+        <label for="feedbackEndpoint">Feedback endpoint</label>
+        <input id="feedbackEndpoint" type="url">
+        <div class="hint">Reports contain decision metadata only. Form values, cookies, request bodies, query strings, passwords, and OTP values are never included.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="reputationEnabled" type="checkbox"> Use privacy-safe reputation checks</label>
+        <label for="reputationEndpoint">Local reputation gateway</label>
+        <input id="reputationEndpoint" type="url">
+        <div class="hint">Only a normalized hostname is sent to the loopback gateway. Query strings, affiliate codes, paths, form values, and credentials are excluded.</div>
+      </div>
+
+      <div class="field">
+        <label for="sensitivityMode">Early-warning sensitivity</label>
+        <select id="sensitivityMode">
+          <option value="CONSERVATIVE">Conservative — require identity mismatch plus sensitive action</option>
+          <option value="BALANCED">Balanced — recommended default</option>
+          <option value="PROTECTIVE">Protective — earlier warnings with more false positives</option>
+        </select>
+        <div class="hint">This affects only early RISKY CONTEXT cautions. Confirmed malicious reputation and direct HIGH RISK behavior can never be suppressed.</div>
       </div>
 
       <div class="field">
@@ -153,6 +188,14 @@
         <div class="hint">Keeps UI behavior stable for presentations and prevents repeated warning redraws from flickering.</div>
       </div>
 
+      <div class="field">
+        <label class="checkbox-label">
+          <input id="shadowMode" type="checkbox">
+          Evidence-policy shadow comparison
+        </label>
+        <div class="hint">Records privacy-safe legacy-versus-evidence-policy decisions in scan reports. Shadow results never control visible warnings.</div>
+      </div>
+
       <div class="actions">
         <button id="save" class="primary" type="button">Save Options</button>
         <button id="reset" type="button">Reset Defaults</button>
@@ -161,6 +204,7 @@
     </section>
   </main>
 
+  <script src="engine/feedback_endpoint.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

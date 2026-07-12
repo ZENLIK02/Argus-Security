@@ -136,7 +136,7 @@ const cases = [
       foundStoreKeywords: ["Google Play", "Play Store"],
       apkLinks: ["https://downloads.bad.test/update.apk"]
     }),
-    expect: { level: "SAFE", max: 34 }
+    expect: { level: "HIGH_RISK", category: "FAKE_APP_STORE", min: 70 }
   },
   {
     name: "fake bank full flow",
@@ -146,7 +146,7 @@ const cases = [
       hasLoginKeyword: true,
       foundBankingKeywords: ["online banking", "verify account"]
     }),
-    expect: { level: "SAFE", max: 34 }
+    expect: { level: "HIGH_RISK", category: "FAKE_BANKING", min: 70 }
   },
   {
     name: "gambling content only",
@@ -221,7 +221,7 @@ const cases = [
         externalUrlHints: ["https://relay.invalid/vault"]
       }
     }),
-    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 69 }
+    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 60 }
   },
   {
     name: "temporal exfiltration sequence",
@@ -237,7 +237,7 @@ const cases = [
         }
       }
     }),
-    expect: { level: "SUSPICIOUS", category: "DATA_EXFILTRATION", min: 35, max: 69 }
+    expect: { level: "HIGH_RISK", category: "DATA_EXFILTRATION", min: 70 }
   },
   {
     name: "ad-heavy page without credential theft",

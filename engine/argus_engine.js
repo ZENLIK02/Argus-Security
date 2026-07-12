@@ -7,8 +7,19 @@
 })(typeof globalThis !== "undefined" ? globalThis : self, function createArgusEngine() {
   "use strict";
 
+  const featureExtractor = typeof ArgusFeatureExtractor !== "undefined"
+    ? ArgusFeatureExtractor
+    : typeof module === "object" && module.exports
+      ? require("./feature_extractor.js")
+      : null;
+  const trainedModel = typeof ArgusTrainedModel !== "undefined"
+    ? ArgusTrainedModel
+    : typeof module === "object" && module.exports
+      ? require("./trained_model.json")
+      : null;
+
   const DEFAULT_POLICY = {
-    version: "3.0.0",
+    version: "5.3.0",
     thresholds: {
       suspicious: 35,
       highRisk: 70,
@@ -32,11 +43,13 @@
     activePolicy = policy;
     const analyzerOutputs = [
       analyzeDomain(signals),
+      analyzeIdentity(signals),
       analyzeCredentials(signals),
       analyzeForms(signals),
       analyzeScripts(signals),
       analyzeDownloads(signals),
       analyzeContent(signals),
+      analyzeBrowserProtection(signals),
       analyzeNetwork(signals)
     ];
     const evidence = analyzerOutputs.flatMap((output) => output.evidence);
@@ -56,6 +69,11 @@
     let category = chooseCategory(categoryScores, signals);
     let score = combineCategoryScores(categoryScores, category, policy);
     score = applyScoreFloors(score, evidence, policy);
+
+    const modelAnalysis = getModelAnalysis(signals);
+    const calibrated = applyModelCalibration(score, modelAnalysis, decisionTier, evidence, policy);
+    score = calibrated.score;
+
 
     if (decisionTier === "CONTENT_CATEGORY") {
       score = Math.min(score, policy.thresholds.maximumContentOnlyScore);
@@ -96,15 +114,22 @@
       reasons: reasons.length ? reasons : ["No high-risk indicators were detected."],
       evidence: evidence.map(publicEvidence),
       toolResults: buildToolResults(analyzerOutputs, evidence),
-      policyVersion: policy.version,
+      modelAnalysis: { ...modelAnalysis, applied: calibrated.applied },
+      // This engine is an evidence + advisory-magnitude producer. `level`, `score`
+      // and `decisionTier` are advisory only: the evidence decision policy is the
+      // sole authority for the final status/level/score/warning. `shouldWarn` is
+      // always false here so this layer can never raise a warning on its own.
+      detectionPolicyVersion: policy.version,
       shouldWarn: false,
-      source: "LOCAL_MODEL"
+      source: calibrated.applied ? "LOCAL_ENSEMBLE" : "LOCAL_RULE_ENGINE"
     };
   }
+
 
   function analyzeDomain(signals) {
     const evidence = [];
     const domain = String(signals.domain || "").toLowerCase();
+    const lexical = lexicalOf(signals);
     if (signals.isTrustedDomain) {
       return tool("DOMAIN_ANALYZER", evidence);
     }
@@ -126,12 +151,32 @@
     if (hasBrandImpersonationPattern(domain)) {
       evidence.push(finding("DOMAIN_BRAND_LOOKALIKE", "DOMAIN_ANALYZER", "BRAND_IMPERSONATION", 34, 0.9, "high", "Domain resembles a known brand impersonation pattern."));
     }
+    if (lexical.urlLength >= 100) {
+      evidence.push(finding("URL_UNUSUALLY_LONG", "DOMAIN_ANALYZER", "BRAND_IMPERSONATION", 5, 0.58, "low", "URL is unusually long."));
+    }
+    if (lexical.hasObfuscation || lexical.obfuscatedCharCount >= 2 || lexical.hasAtSymbol) {
+      evidence.push(finding("URL_OBFUSCATION", "DOMAIN_ANALYZER", "BRAND_IMPERSONATION", 12, 0.78, "medium", "URL contains obfuscation or authority-confusion indicators."));
+    }
+    if (lexical.excessiveSubdomainCount >= 2) {
+      evidence.push(finding("URL_EXCESSIVE_SUBDOMAINS", "DOMAIN_ANALYZER", "BRAND_IMPERSONATION", 8, 0.7, "medium", "URL contains an unusually deep subdomain chain."));
+    }
+    if (lexical.domainDigitRatio >= 0.25) {
+      evidence.push(finding("DOMAIN_HIGH_DIGIT_RATIO", "DOMAIN_ANALYZER", "BRAND_IMPERSONATION", 8, 0.68, "medium", "Domain contains an unusually high ratio of digits."));
+    }
+    if (lexical.credentialPathWordCount >= 1) {
+      evidence.push(finding("URL_CREDENTIAL_PATH", "DOMAIN_ANALYZER", "PHISHING_LOGIN", 8, 0.66, "medium", "URL path contains credential or account-verification wording."));
+    }
     return tool("DOMAIN_ANALYZER", evidence);
   }
 
   function analyzeCredentials(signals) {
     const evidence = [];
     const dataLeak = dataLeakOf(signals);
+    if (!signals.isTrustedDomain && (signals.hasSensitiveActionSurface || dataLeak.sensitiveFormCount > 0)) {
+      const kinds = toArray(signals.sensitiveActionKinds).slice(0, 5);
+      const detail = kinds.length ? ` (${kinds.join(", ")})` : "";
+      evidence.push(finding("SENSITIVE_ACTION_SURFACE", "CREDENTIAL_ANALYZER", "SENSITIVE_ACTION", 12, 0.82, "medium", `The page asks for a sensitive account or financial action${detail}.`));
+    }
     if (!signals.isTrustedDomain && signals.hasPasswordField) {
       evidence.push(finding("PASSWORD_UNKNOWN_DOMAIN", "CREDENTIAL_ANALYZER", "PHISHING_LOGIN", 18, 0.65, "medium", "Password field found on an untrusted domain."));
     }
@@ -151,6 +196,31 @@
       evidence.push(finding("BANK_OTP_COMBO", "CREDENTIAL_ANALYZER", "FAKE_BANKING", 32, 0.86, "high", "Banking language appears with OTP verification on an untrusted domain."));
     }
     return tool("CREDENTIAL_ANALYZER", evidence);
+  }
+
+  function analyzeIdentity(signals) {
+    const evidence = [];
+    const identity = signals.identitySignals && typeof signals.identitySignals === "object" ? signals.identitySignals : {};
+    const claimed = toArray(identity.claimedBrandIds);
+    if (claimed.length > 0) {
+      evidence.push(finding("CLAIMED_BRAND_IDENTITY", "IDENTITY_ANALYZER", "BRAND_IMPERSONATION", 10, 0.82, "medium", `Page claims identity associated with ${claimed.slice(0, 3).join(", ")}.`));
+    }
+    if (identity.domainMismatch) {
+      evidence.push(finding("DOMAIN_IDENTITY_MISMATCH", "IDENTITY_ANALYZER", "BRAND_IMPERSONATION", 34, 0.93, "high", "The claimed organization does not match an approved domain."));
+    }
+    if (identity.deceptiveSubdomain) {
+      evidence.push(finding("DECEPTIVE_BRAND_SUBDOMAIN", "IDENTITY_ANALYZER", "BRAND_IMPERSONATION", 30, 0.95, "high", "An official domain name appears inside a different registrable domain."));
+    }
+    if (identity.homographOrTyposquat) {
+      evidence.push(finding("BRAND_HOMOGRAPH_OR_TYPOSQUAT", "IDENTITY_ANALYZER", "BRAND_IMPERSONATION", 32, 0.92, "high", "The domain resembles a registered organization using spelling or character substitutions."));
+    }
+    if (identity.visualMatch) {
+      evidence.push(finding("VISUAL_BRAND_MATCH", "IDENTITY_ANALYZER", "BRAND_IMPERSONATION", 14, 0.84, "medium", "A local logo or favicon hash matches the claimed organization."));
+    }
+    if (identity.primaryContext && identity.primaryContext !== "UNKNOWN") {
+      evidence.push(finding("HIGH_VALUE_CONTEXT", "IDENTITY_ANALYZER", String(identity.primaryContext), identity.highValueContext ? 18 : 10, 0.76, "medium", `Page presents a ${String(identity.primaryContext).toLowerCase().replace(/_/g, " ")} context.`));
+    }
+    return tool("IDENTITY_ANALYZER", evidence);
   }
 
   function analyzeForms(signals) {
@@ -218,6 +288,25 @@
     if (dataLeak.guardedNetworkToggleIndicator && dataLeak.scriptNetworkSinkCount > 0) {
       evidence.push(finding("GUARDED_NETWORK_SEND", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 12, 0.7, "medium", "Network-send behavior is hidden behind a runtime guard."));
     }
+    if ((dataLeak.formValueReadIndicator || dataLeak.formDataReadIndicator) && dataLeak.scriptNetworkSinkCount > 0 &&
+      (signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0)) {
+      evidence.push(finding("FORM_READ_NETWORK_RELAY", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 46, 0.9, "high", "Page script reads form fields and contains network-send behavior on a sensitive form.", true));
+    }
+    if (dataLeak.encodedPayloadIndicator && dataLeak.scriptNetworkSinkCount > 0 &&
+      (signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0)) {
+      evidence.push(finding("ENCODED_SENSITIVE_RELAY", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 44, 0.88, "high", "Sensitive form data can be encoded before script-based transmission.", true));
+    }
+    if ((dataLeak.sensitiveStorageWriteIndicator || dataLeak.cookieReadIndicator) && dataLeak.scriptNetworkSinkCount > 0 &&
+      toArray(dataLeak.externalUrlHints).length > 0) {
+      evidence.push(finding("STORAGE_OR_COOKIE_RELAY", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 42, 0.86, "high", "Sensitive browser storage or cookie access appears with an external network endpoint.", true));
+    }
+    if (dataLeak.webSocketSendIndicator && (signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0)) {
+      evidence.push(finding("WEBSOCKET_SENSITIVE_RELAY", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 42, 0.86, "high", "A sensitive form appears with WebSocket transmission logic.", true));
+    }
+    if (dataLeak.wildcardPostMessageIndicator && dataLeak.scriptNetworkSinkCount > 0 &&
+      (signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0)) {
+      evidence.push(finding("WILDCARD_MESSAGE_RELAY", "SCRIPT_INTENT_ANALYZER", "DATA_EXFILTRATION", 42, 0.86, "high", "Sensitive-page messages can be posted to any origin and enter network-send logic.", true));
+    }
     return tool("SCRIPT_INTENT_ANALYZER", evidence);
   }
 
@@ -258,6 +347,37 @@
       evidence.push(finding(id, "CONTENT_ANALYZER", "MALVERTISING", signals.hasAdHeavySignal ? 45 : 24, 0.78, "medium", "Aggressive advertising or popup-abuse behavior detected."));
     }
     return tool("CONTENT_ANALYZER", evidence);
+  }
+
+  function analyzeBrowserProtection(signals) {
+    const evidence = [];
+    const security = securityOf(signals);
+    const dataLeak = dataLeakOf(signals);
+    const sensitivePage = Boolean(signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0 || dataLeak.credentialLikeTextFieldCount > 0);
+
+    if (sensitivePage && security.insecureActiveContentRequestCount > 0) {
+      evidence.push(finding("SENSITIVE_MIXED_ACTIVE_CONTENT", "BROWSER_PROTECTION_ANALYZER", "INSECURE_FORM_SUBMISSION", 78, 0.97, "critical", "A sensitive page loaded active script, frame, or request content over unencrypted HTTP.", true));
+    } else if (security.mixedContentRequestCount > 0) {
+      evidence.push(finding("MIXED_CONTENT", "BROWSER_PROTECTION_ANALYZER", "INSECURE_FORM_SUBMISSION", 10, 0.68, "medium", "Page loaded some content over insecure HTTP."));
+    }
+
+    if (sensitivePage && security.thirdPartyScriptWithoutIntegrityCount > 0 && security.missingSecurityHeaderCount >= 2) {
+      evidence.push(finding("UNPROTECTED_THIRD_PARTY_SCRIPT_CREDENTIAL_PAGE", "BROWSER_PROTECTION_ANALYZER", "DATA_EXFILTRATION", 44, 0.86, "high", "Credential page runs third-party scripts without integrity metadata and lacks multiple browser protections.", true));
+    }
+
+    if (sensitivePage && security.unsandboxedThirdPartyIframeCount > 0) {
+      evidence.push(finding("UNSANDBOXED_FRAME_CREDENTIAL_PAGE", "BROWSER_PROTECTION_ANALYZER", "DATA_EXFILTRATION", 42, 0.84, "high", "Credential page embeds an unsandboxed third-party frame.", true));
+    }
+
+    if (security.responseHeadersObserved && security.missingSecurityHeaderCount >= 4) {
+      evidence.push(finding("MISSING_BROWSER_PROTECTIONS", "BROWSER_PROTECTION_ANALYZER", "SECURITY_MISCONFIGURATION", 4, 0.72, "low", "Several recommended browser security headers were not observed; this is supporting evidence only."));
+    }
+
+    if (!sensitivePage && security.thirdPartyScriptWithoutIntegrityCount >= 3) {
+      evidence.push(finding("THIRD_PARTY_SCRIPT_NO_INTEGRITY", "BROWSER_PROTECTION_ANALYZER", "SECURITY_MISCONFIGURATION", 5, 0.62, "low", "Several third-party scripts do not declare integrity metadata; this alone does not indicate theft."));
+    }
+
+    return tool("BROWSER_PROTECTION_ANALYZER", evidence);
   }
 
   function analyzeNetwork(signals) {
@@ -305,11 +425,28 @@
     const dataLeak = dataLeakOf(signals);
     const network = networkOf(signals);
     const temporal = temporalOf(signals);
+    const lexical = lexicalOf(signals);
     if (!signals.isTrustedDomain && signals.hasPasswordField && signals.hasOTP && signals.hasLoginKeyword) {
       evidence.push(finding("FULL_CREDENTIAL_FLOW", "DECISION_COMBINER", "PHISHING_LOGIN", 28, 0.92, "high", "Password, OTP, and account-verification signals appear together.", true));
     }
+    if (!signals.isTrustedDomain && (signals.hasPasswordField || signals.hasOTP || dataLeak.credentialLikeTextFieldCount > 0) &&
+      signals.hasLoginKeyword && (toArray(signals.suspiciousDomainSignals).length >= 2 || hasBrandImpersonationPattern(String(signals.domain || "")))) {
+      evidence.push(finding("SUSPICIOUS_DOMAIN_CREDENTIAL_FLOW", "DECISION_COMBINER", "PHISHING_LOGIN", 40, 0.9, "high", "Credential collection and account-verification language appear on a suspicious domain.", true));
+    }
+    if (!signals.isTrustedDomain && lexical.lexicalRiskCount >= 3 &&
+      (signals.hasPasswordField || signals.hasOTP || signals.hasLoginKeyword || dataLeak.credentialLikeTextFieldCount > 0)) {
+      evidence.push(finding("LEXICAL_CREDENTIAL_CLUSTER", "DECISION_COMBINER", "PHISHING_LOGIN", 42, 0.9, "high", "Multiple URL obfuscation indicators appear together with credential or login behavior.", true));
+    }
     if (!signals.isTrustedDomain && toArray(signals.foundStoreKeywords).length > 0 && toArray(signals.apkLinks).length > 0) {
       evidence.push(finding("FAKE_STORE_APK_COMBO", "DECISION_COMBINER", "FAKE_APP_STORE", 52, 0.97, "critical", "Unofficial app-store language appears together with a direct APK download.", true));
+    }
+    if (!signals.isTrustedDomain && signals.hasPasswordField && signals.hasOTP &&
+      toArray(signals.foundStoreKeywords).length > 0 && toArray(signals.apkLinks).length > 0) {
+      evidence.push(finding("FAKE_STORE_CREDENTIAL_APK", "DECISION_COMBINER", "FAKE_APP_STORE", 72, 0.98, "critical", "Unofficial app-store page combines password and OTP collection with a direct APK download.", true));
+    }
+    if (!signals.isTrustedDomain && toArray(signals.foundStoreKeywords).length > 0 &&
+      toArray(dataLeak.thirdPartyApkLinks).length > 0) {
+      evidence.push(finding("FAKE_STORE_THIRD_PARTY_APK", "DECISION_COMBINER", "FAKE_APP_STORE", 76, 0.98, "critical", "Unofficial app-store language directs the APK download to an unrelated domain.", true));
     }
     if (!signals.isTrustedDomain && toArray(signals.foundBankingKeywords).length > 0 && signals.hasPasswordField && signals.hasOTP) {
       evidence.push(finding("FAKE_BANK_FULL_FLOW", "DECISION_COMBINER", "FAKE_BANKING", 42, 0.96, "critical", "Banking language, password collection, and OTP verification appear together.", true));
@@ -365,6 +502,31 @@
       others.slice(1).reduce((total, entry) => total + entry[1] * policy.combiner.tertiaryCategoryFactor, 0);
   }
 
+  function getModelAnalysis(signals) {
+    if (!featureExtractor || !trainedModel || typeof featureExtractor.predict !== "function") {
+      return { available: false, score: 0, probability: 0, evidenceGroups: 0, version: "unavailable" };
+    }
+    const prediction = featureExtractor.predict(signals, trainedModel);
+    return prediction ? { available: true, ...prediction } : { available: false, score: 0, probability: 0, evidenceGroups: 0, version: "invalid" };
+  }
+
+  function applyModelCalibration(score, modelAnalysis, decisionTier, evidence, policy) {
+    if (!modelAnalysis.available || modelAnalysis.evidenceGroups < 2 || decisionTier === "CONTENT_CATEGORY") {
+      return { score, applied: false };
+    }
+
+    const hasCorroboration = new Set(evidence.map((item) => item.tool)).size >= 2 || evidence.length >= 3;
+    if (!hasCorroboration || modelAnalysis.score < policy.thresholds.suspicious) {
+      return { score, applied: false };
+    }
+
+    const maximum = decisionTier === "OBSERVED_DATA_FLOW" ? 100 : policy.thresholds.maximumContextOnlyScore;
+    const calibrated = Math.min(maximum, modelAnalysis.score);
+    return calibrated > score
+      ? { score: calibrated, applied: true }
+      : { score, applied: false };
+  }
+
   function chooseCategory(categoryScores, signals) {
     const dataLeak = dataLeakOf(signals);
     const network = networkOf(signals);
@@ -375,9 +537,14 @@
       (dataLeak.sensitiveFormCount > 0 && dataLeak.crossDomainFormActionCount > 0) ||
       network.crossDomainSensitiveWriteRequests > 0 || network.beaconOrPingAfterSensitiveInput > 0 || network.queryBearingGetAfterSensitiveForm > 0 ||
       (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
+      ((dataLeak.formValueReadIndicator || dataLeak.formDataReadIndicator) && dataLeak.scriptNetworkSinkCount > 0) ||
+      ((dataLeak.sensitiveStorageWriteIndicator || dataLeak.cookieReadIndicator) && dataLeak.scriptNetworkSinkCount > 0) ||
+      (dataLeak.webSocketSendIndicator && (signals.hasPasswordField || signals.hasOTP || dataLeak.sensitiveFormCount > 0)) ||
+      (dataLeak.wildcardPostMessageIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
       (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
       network.requestsAfterFormSubmit >= 3 || network.requestsAfterPasswordFocus >= 3 ||
       temporal.formSubmitThenThirdPartyCount >= 3) return "DATA_EXFILTRATION";
+    if (toArray(dataLeak.httpApkLinks).length > 0) return "MALICIOUS_APK";
     if (toArray(signals.foundBankingKeywords).length > 0 && (signals.hasPasswordField || signals.hasOTP)) return "FAKE_BANKING";
     if (toArray(signals.foundStoreKeywords).length > 0 && toArray(signals.apkLinks).length > 0) return "FAKE_APP_STORE";
     if (toArray(signals.apkLinks).length > 0) return "MALICIOUS_APK";
@@ -432,9 +599,9 @@
       reasons: [reason],
       evidence: [],
       toolResults: buildToolResults(outputs, []),
-      policyVersion: policy.version,
+      detectionPolicyVersion: policy.version,
       shouldWarn: false,
-      source: "LOCAL_MODEL"
+      source: "LOCAL_RULE_ENGINE"
     };
   }
 
@@ -524,6 +691,14 @@
     return signals.networkSignals || {};
   }
 
+  function securityOf(signals) {
+    return signals.securitySignals || {};
+  }
+
+  function lexicalOf(signals) {
+    return signals.urlLexicalSignals || {};
+  }
+
   function temporalOf(signals) {
     return signals.temporalSignals || networkOf(signals).temporalSignals || {};
   }
@@ -570,11 +745,13 @@
     DEFAULT_POLICY,
     analyzers: {
       analyzeDomain,
+      analyzeIdentity,
       analyzeCredentials,
       analyzeForms,
       analyzeScripts,
       analyzeDownloads,
       analyzeContent,
+      analyzeBrowserProtection,
       analyzeNetwork
     }
   };

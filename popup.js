@@ -1,6 +1,7 @@
 const GET_LATEST_MESSAGE = "ARGUS_GET_LATEST_SCAN";
 const RESCAN_MESSAGE = "ARGUS_RESCAN_PAGE";
 const CLEAR_LAST_SCAN_MESSAGE = "ARGUS_CLEAR_LAST_SCAN";
+const REPORT_FALSE_POSITIVE_MESSAGE = "ARGUS_REPORT_FALSE_POSITIVE";
 
 const domainEl = document.getElementById("domain");
 const scoreEl = document.getElementById("score");
@@ -12,6 +13,8 @@ const modelEl = document.getElementById("model");
 const confidenceEl = document.getElementById("confidence");
 const policyEl = document.getElementById("policy");
 const decisionTierEl = document.getElementById("decisionTier");
+const evidenceLevelEl = document.getElementById("evidenceLevel");
+const warningPermissionEl = document.getElementById("warningPermission");
 const guardGridEl = document.getElementById("guardGrid");
 const analyzerListEl = document.getElementById("analyzerList");
 const reasonsEl = document.getElementById("reasons");
@@ -19,6 +22,8 @@ const emptyEl = document.getElementById("empty");
 const exportReportButton = document.getElementById("exportReport");
 const openOptionsButton = document.getElementById("openOptions");
 const clearScanButton = document.getElementById("clearScan");
+const reportFalsePositiveButton = document.getElementById("reportFalsePositive");
+const feedbackStatusEl = document.getElementById("feedbackStatus");
 
 let activeTab = null;
 let latestScan = null;
@@ -31,16 +36,15 @@ async function initPopup() {
   exportReportButton.addEventListener("click", exportScanReport);
   openOptionsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
   clearScanButton.addEventListener("click", clearLastScan);
+  reportFalsePositiveButton.addEventListener("click", reportFalsePositive);
 
   if (activeTab && activeTab.url) {
     domainEl.textContent = getDomain(activeTab.url);
-    requestPageRescan(activeTab.id);
   }
 
-  const response = await chrome.runtime.sendMessage({
-    type: GET_LATEST_MESSAGE,
-    tabId: activeTab ? activeTab.id : null
-  });
+  const rescanRequestedAt = Date.now();
+  const rescanSent = activeTab ? await requestPageRescan(activeTab.id) : false;
+  const response = await getFreshLatestScan(activeTab, rescanSent ? rescanRequestedAt : 0);
 
   if (!response || !response.ok || !response.result) {
     showEmptyState(activeTab);
@@ -51,13 +55,57 @@ async function initPopup() {
 }
 
 function requestPageRescan(tabId) {
-  if (!tabId) {
-    return;
+  if (!Number.isInteger(tabId) || tabId < 0) {
+    return Promise.resolve(false);
   }
 
-  chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE }, () => {
-    chrome.runtime.lastError;
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE }, () => {
+      resolve(!chrome.runtime.lastError);
+    });
   });
+}
+
+async function getFreshLatestScan(tab, minimumTimestamp) {
+  let latestMatchingResponse = null;
+  let bestFinalResponse = null;
+  let previousSignature = "";
+  let stableReadCount = 0;
+  // Wait for a settled FINAL/INTERACTION_FINAL scan so the popup does not show an
+  // OBSERVING/preliminary score. The interaction-final scan can land a few seconds
+  // after load, so poll up to ~3s before falling back to the best available scan.
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const response = await chrome.runtime.sendMessage({
+      type: GET_LATEST_MESSAGE,
+      tabId: tab ? tab.id : null
+    });
+    if (response && response.ok && response.result && scanMatchesTab(response.result, tab)) {
+      latestMatchingResponse = response;
+      const result = response.result;
+      if (result.isFinal === true) {
+        bestFinalResponse = response;
+        const scanTimestamp = Date.parse(result.timestamp || "");
+        const freshEnough = !minimumTimestamp || (Number.isFinite(scanTimestamp) && scanTimestamp >= minimumTimestamp);
+        const risk = result.risk || {};
+        const signature = [result.timestamp, result.navigationId, result.scanPhase, risk.status || risk.level, risk.score ?? risk.riskScore].join("|");
+        stableReadCount = signature === previousSignature ? stableReadCount + 1 : 1;
+        previousSignature = signature;
+        // Settle on a stable final result once it is fresh, or after giving the
+        // rescan ~1s to produce one.
+        if (stableReadCount >= 3 && (freshEnough || attempt >= 8)) {
+          return response;
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 125));
+  }
+  return bestFinalResponse || latestMatchingResponse;
+}
+
+function scanMatchesTab(scan, tab) {
+  if (!scan || !tab || !tab.url) return Boolean(scan);
+  // Route-accurate identity (matches SPA hash/query routes via pageKey).
+  return ArgusScanFreshness.scanMatchesTab(scan, tab.url);
 }
 
 function showEmptyState(tab) {
@@ -72,12 +120,15 @@ function showEmptyState(tab) {
   confidenceEl.textContent = "Confidence: unknown";
   policyEl.textContent = "Policy: unknown";
   decisionTierEl.textContent = "Decision tier: unknown";
+  evidenceLevelEl.textContent = "Evidence level: unknown";
+  warningPermissionEl.textContent = "Warning permission: none";
   renderDataLeakGuard(null);
   renderAnalyzerResults(null);
   reasonsEl.replaceChildren();
   emptyEl.hidden = false;
   exportReportButton.disabled = true;
   clearScanButton.disabled = true;
+  reportFalsePositiveButton.disabled = true;
 
   if (tab && tab.url) {
     domainEl.textContent = getDomain(tab.url);
@@ -89,22 +140,26 @@ function renderScan(scan) {
   const risk = scan.risk || { score: 0, level: "SAFE", category: "SAFE", reasons: [] };
   const riskClass = getRiskClass(risk.level);
   const score = getRiskScore(risk);
+  const observing = scan.isFinal === false;
 
   emptyEl.hidden = true;
   exportReportButton.disabled = false;
   clearScanButton.disabled = false;
+  reportFalsePositiveButton.disabled = false;
   domainEl.textContent = scan.domain || getDomain(scan.url || "");
-  scoreEl.textContent = `${score}/100`;
-  scoreEl.className = riskClass;
-  levelEl.textContent = formatRiskLevel(risk.level);
-  levelEl.className = riskClass;
-  categoryEl.textContent = `Category: ${risk.category || "UNKNOWN"}`;
-  sourceEl.textContent = `Source: ${risk.source || scan.source || "LOCAL_MODEL"}`;
+  scoreEl.textContent = observing ? "--/100" : `${score}/100`;
+  scoreEl.className = observing ? "" : riskClass;
+  levelEl.textContent = observing ? "OBSERVING" : formatRiskLevel(risk.level);
+  levelEl.className = observing ? "" : riskClass;
+  categoryEl.textContent = observing ? "Context: waiting for final result" : `Context: ${risk.riskContext || risk.category || "UNKNOWN"}`;
+  sourceEl.textContent = `Source: ${risk.source || scan.source || "LOCAL_RULE_ENGINE"}`;
   trustedEl.textContent = `Trusted domain: ${scan.isTrustedDomain ? "true" : "false"}`;
-  modelEl.textContent = `Model: ${getModelStatus(scan.modelStatus)}`;
+  modelEl.textContent = `Model: ${getModelStatus(scan.modelStatus, risk.modelAnalysis)}`;
   confidenceEl.textContent = `Confidence: ${formatConfidence(risk.confidence)}`;
   policyEl.textContent = `Policy: ${risk.policyVersion || "legacy"}`;
   decisionTierEl.textContent = `Decision tier: ${formatDecisionTier(risk.decisionTier)}`;
+  evidenceLevelEl.textContent = `Evidence level: ${risk.evidenceLevel || "NONE"}`;
+  warningPermissionEl.textContent = `Warning: ${risk.warningAllowed ? `${risk.warningStage || "BADGE"} (${risk.sensitivityMode || "BALANCED"})` : "none"}`;
   renderDataLeakGuard(scan);
   renderAnalyzerResults(scan);
 
@@ -116,6 +171,16 @@ function renderScan(scan) {
   });
 }
 
+async function reportFalsePositive() {
+  if (!latestScan) return;
+  feedbackStatusEl.textContent = "Saving feedback...";
+  const response = await chrome.runtime.sendMessage({ type: REPORT_FALSE_POSITIVE_MESSAGE, payload: latestScan });
+  const status = response && response.result && response.result.delivery && response.result.delivery.status;
+  feedbackStatusEl.textContent = status === "SENT"
+    ? "Saved and sent to the local feedback collector."
+    : "Saved locally and queued until the feedback collector is online.";
+}
+
 function exportScanReport() {
   if (!latestScan) {
     return;
@@ -123,6 +188,7 @@ function exportScanReport() {
 
   const risk = latestScan.risk || {};
   const report = {
+    reportSchemaVersion: latestScan.reportSchemaVersion || "4",
     timestamp: new Date().toISOString(),
     scanTimestamp: latestScan.timestamp || null,
     url: latestScan.url || "",
@@ -136,12 +202,42 @@ function exportScanReport() {
     reasons: Array.isArray(risk.reasons) ? risk.reasons : [],
     confidence: normalizeConfidence(risk.confidence),
     policyVersion: risk.policyVersion || null,
+    detectionPolicyVersion: risk.detectionPolicyVersion || latestScan.detectionPolicyVersion || null,
     decisionTier: risk.decisionTier || "UNKNOWN",
+    finalStatus: risk.status || risk.level || "UNKNOWN",
+    riskContext: risk.riskContext || "UNKNOWN",
+    warningStage: risk.warningStage || "NONE",
+    sensitivityMode: risk.sensitivityMode || latestScan.settings && latestScan.settings.sensitivityMode || "BALANCED",
+    claimedBrands: Array.isArray(risk.claimedBrands) ? risk.claimedBrands.slice(0, 5).map((brand) => ({
+      brandId: String(brand && brand.brandId || "").slice(0, 80),
+      displayName: String(brand && brand.displayName || "").slice(0, 120),
+      contexts: Array.isArray(brand && brand.contexts) ? brand.contexts.slice(0, 5).map((item) => String(item).slice(0, 60)) : [],
+      official: Boolean(brand && brand.official)
+    })) : [],
+    identityEvidence: risk.identityEvidence && typeof risk.identityEvidence === "object" ? { ...risk.identityEvidence } : {},
+    scoreBeforePolicy: Number(risk.legacyScore) || 0,
+    scoreAfterPolicy: getRiskScore(risk),
+    evidenceLevel: risk.evidenceLevel || "NONE",
+    evidenceIds: Array.isArray(risk.evidenceIds) ? risk.evidenceIds : [],
+    evidenceGroups: Array.isArray(risk.evidenceGroups) ? risk.evidenceGroups : [],
+    directEvidence: sanitizeDirectEvidence(risk.directEvidence),
+    modelOnly: Boolean(risk.modelOnly),
+    warningAllowed: Boolean(risk.warningAllowed),
+    overlayAllowed: Boolean(risk.overlayAllowed),
+    navigationId: latestScan.navigationId || null,
+    frameId: Number(latestScan.frameId) || 0,
+    scanPhase: latestScan.scanPhase || "UNKNOWN",
+    interactionTimeline: sanitizeTimeline(latestScan.interactionTimeline),
+    shadowComparison: sanitizeShadowComparison(latestScan.shadowComparison),
+    reputation: sanitizeReputation(latestScan.reputation),
     evidence: sanitizeEvidence(risk.evidence),
     toolResults: sanitizeToolResults(risk.toolResults),
-    modelStatus: latestScan.modelStatus || { mode: "LOCAL_MODEL", externalAi: false },
+    modelAnalysis: sanitizeModelAnalysis(risk.modelAnalysis),
+    modelStatus: latestScan.modelStatus || { mode: "LOCAL_RULE_ENGINE", externalAi: false },
     dataLeakSignals: sanitizeDataLeakSignals(latestScan.dataLeakSignals),
-    networkSignals: sanitizeNetworkSignals(latestScan.networkSignals)
+    networkSignals: sanitizeNetworkSignals(latestScan.networkSignals),
+    securitySignals: sanitizeSecuritySignals(latestScan.securitySignals),
+    urlLexicalSignals: sanitizeUrlLexicalSignals(latestScan.urlLexicalSignals)
   };
 
   const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
@@ -151,6 +247,51 @@ function exportScanReport() {
   anchor.download = buildReportFilename(report);
   anchor.click();
   URL.revokeObjectURL(objectUrl);
+}
+
+function sanitizeReputation(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    verdict: String(raw.verdict || "UNAVAILABLE").slice(0, 40),
+    confidence: String(raw.confidence || "LOW").slice(0, 20),
+    sources: Array.isArray(raw.sources) ? raw.sources.slice(0, 8).map((item) => String(item).slice(0, 80)) : [],
+    categories: Array.isArray(raw.categories) ? raw.categories.slice(0, 8).map((item) => String(item).slice(0, 80)) : [],
+    firstSeen: raw.firstSeen ? String(raw.firstSeen).slice(0, 40) : null,
+    lastSeen: raw.lastSeen ? String(raw.lastSeen).slice(0, 40) : null,
+    checkedAt: raw.checkedAt ? String(raw.checkedAt).slice(0, 40) : null
+  };
+}
+
+function sanitizeDirectEvidence(value) {
+  return (Array.isArray(value) ? value : []).slice(0, 12).map((item) => ({
+    id: String(item.id || ""), type: String(item.type || ""), severity: String(item.severity || ""),
+    timestamp: String(item.timestamp || ""), source: String(item.source || ""),
+    destinationRole: String(item.destinationRole || "UNKNOWN"), navigationId: String(item.navigationId || ""),
+    frameId: Number(item.frameId) || 0, scanPhase: String(item.scanPhase || ""), explanation: String(item.explanation || "")
+  }));
+}
+
+function sanitizeTimeline(value) {
+  return (Array.isArray(value) ? value : []).slice(-40).map((item) => ({
+    navigationId: String(item.navigationId || ""), frameId: Number(item.frameId) || 0,
+    timestamp: String(item.timestamp || ""), eventType: String(item.eventType || ""),
+    scanPhase: String(item.scanPhase || ""), destinationRole: String(item.destinationRole || "NONE"),
+    method: String(item.method || "NONE"), protocol: String(item.protocol || "NONE"),
+    sensitiveContextPresent: Boolean(item.sensitiveContextPresent),
+    evidenceIds: Array.isArray(item.evidenceIds) ? item.evidenceIds.slice(0, 8).map(String) : []
+  }));
+}
+
+function sanitizeShadowComparison(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    legacyStatus: String(value.legacyStatus || ""), legacyScore: Number(value.legacyScore) || 0,
+    evidenceFirstStatus: String(value.evidenceFirstStatus || ""), evidenceFirstScore: Number(value.evidenceFirstScore) || 0,
+    evidenceIds: Array.isArray(value.evidenceIds) ? value.evidenceIds.slice(0, 20).map(String) : [],
+    modelScore: Number(value.modelScore) || 0, modelOnly: Boolean(value.modelOnly),
+    overlayAllowed: Boolean(value.overlayAllowed), timestamp: String(value.timestamp || ""),
+    modelVersion: String(value.modelVersion || ""), policyVersion: String(value.policyVersion || "")
+  };
 }
 
 function renderAnalyzerResults(scan) {
@@ -260,6 +401,8 @@ function buildReportFilename(report) {
 function renderDataLeakGuard(scan) {
   const dataLeak = scan && scan.dataLeakSignals ? scan.dataLeakSignals : {};
   const network = scan && scan.networkSignals ? scan.networkSignals : {};
+  const security = scan && scan.securitySignals ? scan.securitySignals : {};
+  const lexical = scan && scan.urlLexicalSignals ? scan.urlLexicalSignals : {};
   const items = [
     ["Cross-domain forms", dataLeak.crossDomainFormActionCount],
     ["HTTP form actions", dataLeak.httpFormActionCount],
@@ -278,6 +421,11 @@ function renderDataLeakGuard(scan) {
     ["Credential-like fields", dataLeak.credentialLikeTextFieldCount],
     ["Script network sinks", dataLeak.scriptNetworkSinkCount],
     ["Dynamic endpoints", dataLeak.dynamicEndpointAssemblyCount],
+    ["Form/script relay", Number(Boolean(dataLeak.formValueReadIndicator)) + Number(Boolean(dataLeak.formDataReadIndicator))],
+    ["Storage/cookie relay", Number(Boolean(dataLeak.sensitiveStorageWriteIndicator)) + Number(Boolean(dataLeak.cookieReadIndicator))],
+    ["Mixed active content", security.insecureActiveContentRequestCount],
+    ["Unprotected third-party scripts", security.thirdPartyScriptWithoutIntegrityCount],
+    ["URL lexical indicators", lexical.lexicalRiskCount],
     ["Clipboard/file signals", Number(Boolean(dataLeak.clipboardReadIndicator)) + Number(Boolean(dataLeak.fileMetadataHarvestIndicator))],
     ["HTTP APK links", Array.isArray(dataLeak.httpApkLinks) ? dataLeak.httpApkLinks.length : 0],
     ["Third-party APK links", Array.isArray(dataLeak.thirdPartyApkLinks) ? dataLeak.thirdPartyApkLinks.length : 0]
@@ -332,7 +480,14 @@ function sanitizeDataLeakSignals(signals) {
     localFormWithJsSinkIndicator: Boolean(raw.localFormWithJsSinkIndicator),
     credentialLikeTextFieldCount: Number(raw.credentialLikeTextFieldCount) || 0,
     sensitiveTextareaCount: Number(raw.sensitiveTextareaCount) || 0,
-    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent)
+    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent),
+    formValueReadIndicator: Boolean(raw.formValueReadIndicator),
+    formDataReadIndicator: Boolean(raw.formDataReadIndicator),
+    sensitiveStorageWriteIndicator: Boolean(raw.sensitiveStorageWriteIndicator),
+    cookieReadIndicator: Boolean(raw.cookieReadIndicator),
+    encodedPayloadIndicator: Boolean(raw.encodedPayloadIndicator),
+    webSocketSendIndicator: Boolean(raw.webSocketSendIndicator),
+    wildcardPostMessageIndicator: Boolean(raw.wildcardPostMessageIndicator)
   };
 }
 
@@ -359,6 +514,8 @@ function sanitizeNetworkSignals(signals) {
     beaconOrPingAfterSensitiveInput: Number(raw.beaconOrPingAfterSensitiveInput) || 0,
     queryBearingGetAfterSensitiveForm: Number(raw.queryBearingGetAfterSensitiveForm) || 0,
     suspiciousRequestDomains: Array.isArray(raw.suspiciousRequestDomains) ? raw.suspiciousRequestDomains.slice(0, 20) : [],
+    destinationRoles: Array.isArray(raw.destinationRoles) ? raw.destinationRoles.slice(0, 30) : [],
+    destinationRoleCounts: raw.destinationRoleCounts && typeof raw.destinationRoleCounts === "object" ? { ...raw.destinationRoleCounts } : {},
     temporalSignals: {
       formSubmitThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.formSubmitThenThirdPartyCount) || 0,
       passwordFocusThenThirdPartyCount: Number(raw.temporalSignals && raw.temporalSignals.passwordFocusThenThirdPartyCount) || 0,
@@ -372,12 +529,60 @@ function sanitizeNetworkSignals(signals) {
   };
 }
 
-function getModelStatus(status) {
+function sanitizeModelAnalysis(value) {
+  const raw = value || {};
+  return {
+    available: Boolean(raw.available),
+    applied: Boolean(raw.applied),
+    score: Number(raw.score) || 0,
+    probability: Number(raw.probability) || 0,
+    evidenceGroups: Number(raw.evidenceGroups) || 0,
+    version: String(raw.version || "unavailable").slice(0, 40)
+  };
+}
+
+function sanitizeSecuritySignals(value) {
+  const raw = value || {};
+  return {
+    responseHeadersObserved: Boolean(raw.responseHeadersObserved),
+    hasContentSecurityPolicy: Boolean(raw.hasContentSecurityPolicy),
+    hasStrictTransportSecurity: Boolean(raw.hasStrictTransportSecurity),
+    hasXContentTypeOptions: Boolean(raw.hasXContentTypeOptions),
+    hasReferrerPolicy: Boolean(raw.hasReferrerPolicy),
+    hasPermissionsPolicy: Boolean(raw.hasPermissionsPolicy),
+    missingSecurityHeaderCount: Number(raw.missingSecurityHeaderCount) || 0,
+    mixedContentRequestCount: Number(raw.mixedContentRequestCount) || 0,
+    insecureActiveContentRequestCount: Number(raw.insecureActiveContentRequestCount) || 0,
+    thirdPartyScriptWithoutIntegrityCount: Number(raw.thirdPartyScriptWithoutIntegrityCount) || 0,
+    unsandboxedThirdPartyIframeCount: Number(raw.unsandboxedThirdPartyIframeCount) || 0
+  };
+}
+
+function sanitizeUrlLexicalSignals(value) {
+  const raw = value || {};
+  return {
+    urlLength: Number(raw.urlLength) || 0,
+    domainLength: Number(raw.domainLength) || 0,
+    isDomainIP: Boolean(raw.isDomainIP),
+    subdomainCount: Number(raw.subdomainCount) || 0,
+    excessiveSubdomainCount: Number(raw.excessiveSubdomainCount) || 0,
+    hasObfuscation: Boolean(raw.hasObfuscation),
+    obfuscatedCharCount: Number(raw.obfuscatedCharCount) || 0,
+    domainDigitRatio: Number(raw.domainDigitRatio) || 0,
+    hyphenCount: Number(raw.hyphenCount) || 0,
+    credentialPathWordCount: Number(raw.credentialPathWordCount) || 0,
+    hasAtSymbol: Boolean(raw.hasAtSymbol),
+    lexicalRiskCount: Number(raw.lexicalRiskCount) || 0
+  };
+}
+
+function getModelStatus(status, analysis) {
   if (!status || !status.mode) {
     return "Project Argus local model";
   }
 
-  return status.externalAi ? status.mode : `${status.mode} only`;
+  const model = analysis && analysis.available ? `, calibrator ${analysis.score}/100${analysis.applied ? " applied" : " advisory"}` : "";
+  return `${status.mode}${model}`;
 }
 
 function getRiskScore(risk) {
@@ -393,6 +598,12 @@ function getRiskClass(level) {
 
   if (level === "SUSPICIOUS") {
     return "suspicious";
+  }
+  if (level === "RISKY_CONTEXT") {
+    return "risky-category";
+  }
+  if (level === "MONITORING" || level === "UNCERTAIN" || level === "UNAVAILABLE") {
+    return "monitoring";
   }
 
   return "safe";

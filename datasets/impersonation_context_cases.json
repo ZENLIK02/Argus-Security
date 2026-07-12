@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-12",
+  "cases": [
+    {"id":"bank-fake","domain":"kbank-secure-login.example","surface":"KBank mobile banking login","sensitive":true,"expectContext":"BANKING_LENDING","expectStatus":"RISKY_CONTEXT"},
+    {"id":"bank-official","domain":"www.kbank.co.th","surface":"KBank mobile banking login","sensitive":true,"expectContext":"BANKING_LENDING","expectStatus":"SAFE"},
+    {"id":"investment-fake","domain":"binance-profit.example","surface":"Binance investment trading connect wallet","sensitive":true,"expectContext":"INVESTMENT_CRYPTO","expectStatus":"RISKY_CONTEXT"},
+    {"id":"investment-official","domain":"www.binance.com","surface":"Binance trading","sensitive":false,"expectContext":"INVESTMENT_CRYPTO","expectStatus":"SAFE"},
+    {"id":"wallet-fake","domain":"paypal-wallet-check.example","surface":"PayPal wallet verification payment required","sensitive":true,"expectContext":"PAYMENT_WALLET","expectStatus":"RISKY_CONTEXT"},
+    {"id":"wallet-official","domain":"www.paypal.com","surface":"PayPal payment","sensitive":true,"expectContext":"PAYMENT_WALLET","expectStatus":"SAFE"},
+    {"id":"government-fake","domain":"thai-tax-refund.example","surface":"Thai Revenue Department tax refund official notice","sensitive":true,"expectContext":"GOVERNMENT_PUBLIC_SERVICE","expectStatus":"RISKY_CONTEXT"},
+    {"id":"government-official","domain":"www.rd.go.th","surface":"กรมสรรพากร คืนภาษี","sensitive":true,"expectContext":"GOVERNMENT_PUBLIC_SERVICE","expectStatus":"SAFE"},
+    {"id":"telecom-fake","domain":"ais-service-bill.example","surface":"AIS mobile bill service suspension payment","sensitive":true,"expectContext":"TELECOM_UTILITY","expectStatus":"RISKY_CONTEXT"},
+    {"id":"telecom-official","domain":"www.ais.th","surface":"AIS mobile bill","sensitive":true,"expectContext":"TELECOM_UTILITY","expectStatus":"SAFE"},
+    {"id":"shopping-fake","domain":"shopee-redelivery.example","surface":"Shopee parcel redelivery fee payment","sensitive":true,"expectContext":"SHOPPING_DELIVERY","expectStatus":"RISKY_CONTEXT"},
+    {"id":"shopping-official","domain":"shopee.co.th","surface":"Shopee order delivery","sensitive":true,"expectContext":"SHOPPING_DELIVERY","expectStatus":"SAFE"},
+    {"id":"platform-fake","domain":"google-account-verify.example","surface":"Google verify your account login","sensitive":true,"expectContext":"PLATFORM_ACCOUNT","expectStatus":"RISKY_CONTEXT"},
+    {"id":"platform-official","domain":"accounts.google.com","surface":"Google account login","sensitive":true,"expectContext":"PLATFORM_ACCOUNT","expectStatus":"SAFE"},
+    {"id":"support-fake","domain":"microsoft-security-help.example","surface":"Microsoft security alert technical support remote access","sensitive":true,"expectContext":"TECH_SUPPORT_SECURITY","expectStatus":"RISKY_CONTEXT"},
+    {"id":"support-official","domain":"support.microsoft.com","surface":"Microsoft technical support","sensitive":false,"expectContext":"TECH_SUPPORT_SECURITY","expectStatus":"SAFE"},
+    {"id":"advance-fee-fake","domain":"fast-job-offer.example","surface":"job application fee processing fee advance fee","sensitive":true,"expectContext":"REWARD_JOB_CHARITY_FEE","expectStatus":"RISKY_CONTEXT"},
+    {"id":"charity-information","domain":"community.example","surface":"charity donation information","sensitive":false,"expectContext":"REWARD_JOB_CHARITY_FEE","expectStatus":"MONITORING"}
+  ]
+}

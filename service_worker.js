@@ -1,11 +1,17 @@
+let engineReady = false;
 try {
-  importScripts("engine/argus_engine.js");
+  importScripts("engine/shared_lists.js", "engine/brand_identity.js", "engine/feature_extractor.js", "engine/trained_model.js", "engine/argus_engine.js", "engine/evidence_decision_policy.js", "engine/navigation_session_guard.js", "engine/network_correlation.js", "engine/scan_freshness.js", "engine/feedback_endpoint.js");
+  engineReady = typeof ArgusEngine !== "undefined" && typeof ArgusEvidencePolicy !== "undefined" &&
+    typeof ArgusNavigationGuard !== "undefined" && typeof ArgusNetworkCorrelation !== "undefined" &&
+    typeof ArgusScanFreshness !== "undefined" && typeof ArgusSharedLists !== "undefined" && typeof ArgusBrandIdentity !== "undefined" && typeof ArgusFeatureExtractor !== "undefined";
 } catch (error) {
-  console.error("[Project Argus] modular engine failed to load; legacy detector will be used.", error);
+  console.error("[Project Argus] modular engine failed to load; scanning is disabled until the extension is reloaded.", error);
+}
+if (!engineReady) {
+  console.error("[Project Argus] required engine modules are unavailable; Project Argus will report ENGINE_UNAVAILABLE instead of scanning. There is no silent legacy fallback.");
 }
 
 const SCAN_MESSAGE = "ARGUS_PAGE_SCAN";
-const WARNING_MESSAGE = "ARGUS_SHOW_WARNING";
 const GET_LATEST_MESSAGE = "ARGUS_GET_LATEST_SCAN";
 const RESCAN_MESSAGE = "ARGUS_RESCAN_PAGE";
 const REPORT_FALSE_POSITIVE_MESSAGE = "ARGUS_REPORT_FALSE_POSITIVE";
@@ -13,41 +19,63 @@ const CLEAR_LAST_SCAN_MESSAGE = "ARGUS_CLEAR_LAST_SCAN";
 const PASSWORD_FOCUS_MESSAGE = "ARGUS_PASSWORD_FIELD_FOCUSED";
 const FORM_SUBMITTED_MESSAGE = "ARGUS_FORM_SUBMITTED";
 const DOWNLOAD_CLICKED_MESSAGE = "ARGUS_DOWNLOAD_CLICKED";
+const PAGE_CHANGED_MESSAGE = "ARGUS_PAGE_CHANGED";
 const SETTINGS_KEY = "argusSettings";
+const MODEL_VERSION = "5.0.0";
+// The evidence decision policy is the single authority for status/level/score/
+// warning. Source its version + report schema from that module so there is one
+// definition (falls back only if the engine failed to load — see engineReady).
+const POLICY_VERSION = (typeof ArgusEvidencePolicy !== "undefined" && ArgusEvidencePolicy.POLICY_VERSION) || "evidence-first-v4";
+const REPORT_SCHEMA_VERSION = (typeof ArgusEvidencePolicy !== "undefined" && ArgusEvidencePolicy.REPORT_SCHEMA_VERSION) || "4";
 const TEMPORAL_WINDOW_MS = 30000;
 const SENSITIVE_REQUEST_WINDOW_MS = 15000;
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const MULTI_LABEL_SUFFIXES = new Set([
-  "co.th", "or.th", "go.th", "ac.th", "in.th",
-  "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "org.au",
-  "co.jp", "co.kr", "com.sg", "com.my", "co.nz",
-  "github.io", "pages.dev", "vercel.app", "netlify.app", "appspot.com", "cloudfront.net"
-]);
-
-const CONTENT_RISK_MIN_SCORE = 35;
-
-const GAMBLING_DOMAIN_PATTERNS = [
-  "casino", "slot", "bet", "jackpot", "ufa", "pgslot", "sbobet", "game66", "mahagame", "hydra888", "kingdom66", "lockdown168"
-];
-
-const ADULT_DOMAIN_PATTERNS = [
-  "porn", "xxx", "adult", "18plus"
-];
+// Domain/category lists come from the shared ArgusSharedLists module (single source
+// of truth with content.js — F8). Guarded so the worker still loads in degraded
+// mode (engine load failure) and can return ENGINE_UNAVAILABLE instead of dying.
+const SHARED_LISTS = typeof ArgusSharedLists !== "undefined" ? ArgusSharedLists : {};
+const KNOWN_IDENTITY_DOMAINS = SHARED_LISTS.KNOWN_IDENTITY_DOMAINS || [];
+const KNOWN_PAYMENT_DOMAINS = SHARED_LISTS.KNOWN_PAYMENT_DOMAINS || [];
+const KNOWN_ANALYTICS_DOMAINS = SHARED_LISTS.KNOWN_ANALYTICS_DOMAINS || [];
+const KNOWN_AD_DOMAINS = SHARED_LISTS.KNOWN_AD_DOMAINS || [];
+const CDN_DOMAIN_HINTS = SHARED_LISTS.CDN_DOMAIN_HINTS || [];
+const MULTI_LABEL_SUFFIXES = new Set(SHARED_LISTS.MULTI_LABEL_SUFFIXES || []);
+const GAMBLING_DOMAIN_PATTERNS = SHARED_LISTS.GAMBLING_DOMAIN_PATTERNS || [];
+const ADULT_DOMAIN_PATTERNS = SHARED_LISTS.ADULT_DOMAIN_PATTERNS || [];
 
 const DEFAULT_SETTINGS = {
   warningThreshold: 35,
   showBadgeOnSafePages: true,
-  demoMode: true
+  demoMode: true,
+  progressiveScan: true,
+  observationWindowMs: 4000,
+  interactionObservationMs: 5000,
+  sendFalsePositiveFeedback: true,
+  feedbackEndpoint: "http://localhost:8000/feedback/false-positive",
+  reputationEnabled: true,
+  reputationEndpoint: "http://localhost:8000/v1/reputation/check",
+  sensitivityMode: "BALANCED",
+  shadowMode: true
 };
 
 let trustedDomainsCache = null;
 let riskyCategoriesCache = null;
 let detectionPolicyCache = null;
+let brandRegistryCache = null;
 const tabNetworkSignals = new Map();
 const tabPageDomains = new Map();
+const tabPageKeys = new Map();
+const tabPageEpochs = new Map();
+const tabNavigationIds = new Map();
 const tabRescanTimers = new Map();
+const tabClearTasks = new Map();
+const reputationCache = new Map();
+const visualHashCache = new Map();
+const navigationGuard = engineReady ? ArgusNavigationGuard.create() : null;
 
-initializeNetworkMonitoring();
+if (engineReady) {
+  initializeNetworkMonitoring();
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || !message.type) {
@@ -70,7 +98,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === REPORT_FALSE_POSITIVE_MESSAGE) {
     saveFalsePositiveReport(message.payload)
-      .then(() => sendResponse({ ok: true }))
+      .then((result) => sendResponse({ ok: true, result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
@@ -80,6 +108,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
+  }
+
+  if (message.type === PAGE_CHANGED_MESSAGE) {
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    if (navigationGuard && Number.isInteger(tabId) && tabId >= 0) {
+      clearPageState(tabId, message.payload && message.payload.pageKey);
+      if (message.payload && message.payload.domain) {
+        tabPageDomains.set(tabId, String(message.payload.domain).toLowerCase());
+      }
+      // Hand the fresh navigation id back so the content script stops carrying a
+      // stale id on subsequent sensitive events (which the guard would reject).
+      sendResponse({ ok: true, navigationId: getNavigationId(tabId) });
+      return false;
+    }
+    sendResponse({ ok: true });
+    return false;
   }
 
   if ([PASSWORD_FOCUS_MESSAGE, FORM_SUBMITTED_MESSAGE, DOWNLOAD_CLICKED_MESSAGE].includes(message.type)) {
@@ -102,10 +146,22 @@ function initializeNetworkMonitoring() {
     { urls: ["<all_urls>"] }
   );
 
+  if (chrome.webRequest.onHeadersReceived) {
+    chrome.webRequest.onHeadersReceived.addListener(
+      recordResponseHeaders,
+      { urls: ["<all_urls>"], types: ["main_frame"] },
+      ["responseHeaders"]
+    );
+  }
+
   if (chrome.tabs && chrome.tabs.onRemoved) {
     chrome.tabs.onRemoved.addListener((tabId) => {
       tabNetworkSignals.delete(tabId);
       tabPageDomains.delete(tabId);
+      tabPageKeys.delete(tabId);
+      tabPageEpochs.delete(tabId);
+      tabNavigationIds.delete(tabId);
+      navigationGuard.clear(tabId);
       const timer = tabRescanTimers.get(tabId);
       if (timer) clearTimeout(timer);
       tabRescanTimers.delete(tabId);
@@ -114,9 +170,8 @@ function initializeNetworkMonitoring() {
 
   if (chrome.tabs && chrome.tabs.onUpdated) {
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-      if (changeInfo.status === "loading") {
-        preserveOrClearTemporalState(tabId);
-        tabPageDomains.delete(tabId);
+      if (changeInfo.status === "loading" || typeof changeInfo.url === "string") {
+        clearPageState(tabId);
       }
     });
   }
@@ -134,6 +189,9 @@ function recordNetworkRequest(details) {
 
   const tabDomain = tabPageDomains.get(details.tabId) || getInitiatorDomain(details.initiator || details.documentUrl || "");
   const initiatorDomain = getInitiatorDomain(details.initiator || details.documentUrl || "");
+  if (tabDomain && initiatorDomain && !isSameSiteDomain(tabDomain, initiatorDomain) && Number(details.frameId) === 0 && details.type !== "main_frame") {
+    return;
+  }
   const referenceDomain = tabDomain || initiatorDomain;
   const isThirdParty = referenceDomain ? !isSameSiteDomain(requestMeta.hostname, referenceDomain) : false;
   const signals = getNetworkSignals(details.tabId);
@@ -143,6 +201,40 @@ function recordNetworkRequest(details) {
   const afterFormSubmit = Boolean(signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < SENSITIVE_REQUEST_WINDOW_MS);
   const afterSensitiveFocus = Boolean(signals.lastPasswordFocusAt && now - signals.lastPasswordFocusAt < SENSITIVE_REQUEST_WINDOW_MS);
   const followsSensitiveInteraction = (afterFormSubmit && signals.lastFormWasSensitive) || afterSensitiveFocus;
+  const initiatorProtocol = parseUrlMetadata(details.initiator || details.documentUrl || "").protocol;
+  const isMixedContent = initiatorProtocol === "https:" && requestMeta.protocol === "http:" && details.type !== "main_frame";
+  const destinationRole = classifyDestinationRole({ details, requestMeta, referenceDomain, isThirdParty, isWriteRequest, followsSensitiveInteraction });
+  const unknownWrite = destinationRole === "UNKNOWN_WRITE_DESTINATION";
+  const unknownBeacon = destinationRole === "UNKNOWN_BEACON";
+  // Race-safe beacon flag: recognize a beacon/ping to an unknown third party even
+  // when it arrives before the sensitive interaction (destinationRole would not
+  // yet be UNKNOWN_BEACON). Used only for retroactive correlation, not live counts.
+  const candidateUnknownBeacon = unknownBeacon ||
+    ArgusNetworkCorrelation.isUnknownBeaconDestination(details, isThirdParty, isKnownDestinationRole(destinationRole));
+
+  // Runtime messages and webRequest callbacks can arrive in either order. Retain
+  // metadata only, briefly, so a later sensitive-submit event can correlate a
+  // request that was observed first.
+  if (!followsSensitiveInteraction) {
+    rememberPotentialSensitiveRequest(signals, {
+      at: now,
+      isWriteRequest,
+      isThirdParty,
+      isInsecure: requestMeta.protocol === "http:",
+      isUnknownWrite: unknownWrite,
+      isUnknownBeacon: candidateUnknownBeacon,
+      isQueryImage: details.type === "image" && method === "GET" && requestMeta.hasQuery && isThirdParty,
+      // Do not retain the request URL, body, or headers for race correlation.
+      details: { type: details.type, method, frameId: details.frameId },
+      requestMeta: {
+        protocol: requestMeta.protocol,
+        hostname: requestMeta.hostname,
+        pathname: requestMeta.pathname,
+        hasQuery: requestMeta.hasQuery
+      },
+      destinationRole
+    });
+  }
 
   signals.totalRequests += 1;
   if (isThirdParty) {
@@ -150,6 +242,12 @@ function recordNetworkRequest(details) {
   }
   if (requestMeta.protocol === "http:") {
     signals.insecureHttpRequests += 1;
+  }
+  if (isMixedContent) {
+    signals.mixedContentRequestCount += 1;
+    if (["script", "xmlhttprequest", "sub_frame", "object", "stylesheet"].includes(details.type)) {
+      signals.insecureActiveContentRequestCount += 1;
+    }
   }
   if (isWriteRequest) {
     signals.writeRequests += 1;
@@ -166,13 +264,13 @@ function recordNetworkRequest(details) {
   if (isThirdParty && ["xmlhttprequest", "fetch", "beacon", "ping"].includes(details.type)) {
     signals.thirdPartyXHRRequests += 1;
   }
-  if (afterFormSubmit && isThirdParty) {
+  if (afterFormSubmit && unknownWrite) {
     signals.requestsAfterFormSubmit += 1;
-    addTimelineEvent(signals, "THIRD_PARTY_AFTER_FORM", now);
+    addTimelineEvent(signals, "THIRD_PARTY_AFTER_FORM", now, networkEventMeta(details, requestMeta, destinationRole, followsSensitiveInteraction));
   }
-  if (afterSensitiveFocus && isThirdParty) {
+  if (afterSensitiveFocus && (unknownWrite || unknownBeacon)) {
     signals.requestsAfterPasswordFocus += 1;
-    addTimelineEvent(signals, "THIRD_PARTY_AFTER_PASSWORD", now);
+    addTimelineEvent(signals, "THIRD_PARTY_AFTER_PASSWORD", now, networkEventMeta(details, requestMeta, destinationRole, followsSensitiveInteraction));
   }
   if (afterFormSubmit && isWriteRequest) {
     signals.writeRequestsAfterFormSubmit += 1;
@@ -186,20 +284,23 @@ function recordNetworkRequest(details) {
         signals.insecureSensitiveWriteRequests += 1;
         addTimelineEvent(signals, "UNENCRYPTED_SENSITIVE_WRITE", now);
       }
-      if (isThirdParty) {
+      if (unknownWrite) {
         signals.crossDomainSensitiveWriteRequests += 1;
-        addTimelineEvent(signals, "CROSS_DOMAIN_SENSITIVE_WRITE", now);
+        addLimited(signals.unknownSensitiveDestinations, requestMeta.hostname, 20);
+        addTimelineEvent(signals, "CROSS_DOMAIN_SENSITIVE_WRITE", now, networkEventMeta(details, requestMeta, destinationRole, true));
       }
     }
   }
-  if (["beacon", "ping"].includes(details.type) && followsSensitiveInteraction) {
+  if (["beacon", "ping"].includes(details.type) && followsSensitiveInteraction && unknownBeacon) {
     signals.beaconOrPingAfterSensitiveInput += 1;
-    addTimelineEvent(signals, "BEACON_AFTER_SENSITIVE_INPUT", now);
+    addLimited(signals.unknownSensitiveDestinations, requestMeta.hostname, 20);
+    addTimelineEvent(signals, "BEACON_AFTER_SENSITIVE_INPUT", now, networkEventMeta(details, requestMeta, destinationRole, true));
   }
   if (details.type === "image" && method === "GET" && requestMeta.hasQuery && isThirdParty &&
     afterFormSubmit && signals.lastFormWasSensitive) {
     signals.queryBearingGetAfterSensitiveForm += 1;
-    addTimelineEvent(signals, "QUERY_GET_AFTER_SENSITIVE_FORM", now);
+    addLimited(signals.unknownSensitiveDestinations, requestMeta.hostname, 20);
+    addTimelineEvent(signals, "QUERY_GET_AFTER_SENSITIVE_FORM", now, networkEventMeta(details, requestMeta, "UNKNOWN_BEACON", true));
   }
   if (signals.lastFormSubmitAt && now - signals.lastFormSubmitAt < TEMPORAL_WINDOW_MS && isThirdParty && details.type === "main_frame") {
     signals.formSubmitThenCrossDomainRedirectCount += 1;
@@ -208,6 +309,8 @@ function recordNetworkRequest(details) {
   if (isThirdParty && isSuspiciousRequestType(details.type)) {
     addLimited(signals.suspiciousRequestDomains, requestMeta.hostname, 30);
   }
+  signals.destinationRoleCounts[destinationRole] = (signals.destinationRoleCounts[destinationRole] || 0) + 1;
+  if (destinationRole === "EXECUTABLE_DOWNLOAD_SOURCE") addLimited(signals.executableDownloadDomains, requestMeta.hostname, 10);
 
   signals.updatedAt = now;
   tabNetworkSignals.set(details.tabId, signals);
@@ -219,13 +322,36 @@ function recordNetworkRequest(details) {
   }
 }
 
+function recordResponseHeaders(details) {
+  if (!details || details.tabId < 0 || details.type !== "main_frame") return;
+  const signals = getNetworkSignals(details.tabId);
+  const headerNames = new Set(toArray(details.responseHeaders).map((header) => String(header && header.name || "").toLowerCase()));
+  signals.responseHeadersObserved = true;
+  signals.hasContentSecurityPolicy = headerNames.has("content-security-policy");
+  signals.hasStrictTransportSecurity = headerNames.has("strict-transport-security");
+  signals.hasXContentTypeOptions = headerNames.has("x-content-type-options");
+  signals.hasReferrerPolicy = headerNames.has("referrer-policy");
+  signals.hasPermissionsPolicy = headerNames.has("permissions-policy");
+  signals.updatedAt = Date.now();
+  tabNetworkSignals.set(details.tabId, signals);
+}
+
 function recordPageEvent(type, payload, sender) {
+  if (!navigationGuard) return;
   const tabId = sender && sender.tab ? sender.tab.id : null;
   if (!Number.isInteger(tabId) || tabId < 0) {
     return;
   }
-
   const signals = getNetworkSignals(tabId);
+  if (!navigationGuard.matches({ tabId, pageKey: payload && payload.pageKey, navigationId: payload && payload.navigationId })) {
+    signals.pageEventsRejected += 1;
+    signals.lastPageEventRejectReason = "NAVIGATION_MISMATCH";
+    signals.updatedAt = Date.now();
+    tabNetworkSignals.set(tabId, signals);
+    return;
+  }
+
+  signals.pageEventsAccepted += 1;
   const now = Date.now();
   if (type === PASSWORD_FOCUS_MESSAGE) {
     signals.lastPasswordFocusAt = now;
@@ -239,7 +365,13 @@ function recordPageEvent(type, payload, sender) {
     signals.lastFormCrossDomain = Boolean(payload && payload.isCrossDomainAction);
     signals.lastFormMethod = String(payload && payload.formMethod || "GET").slice(0, 12);
     addTimelineEvent(signals, "FORM_SUBMIT", now);
-    if (signals.lastFormWasSensitive) addTimelineEvent(signals, "SENSITIVE_FORM_SUBMIT", now);
+    if (signals.lastFormWasSensitive) {
+      addTimelineEvent(signals, "SENSITIVE_FORM_SUBMIT", now);
+      correlatePendingSensitiveRequests(signals, now, "FORM_SUBMIT");
+    }
+  }
+  if (type === PASSWORD_FOCUS_MESSAGE) {
+    correlatePendingSensitiveRequests(signals, now, "SENSITIVE_FOCUS");
   }
   if (type === DOWNLOAD_CLICKED_MESSAGE) {
     signals.downloadClickCount += 1;
@@ -257,10 +389,20 @@ function schedulePageRescan(tabId, delayMs) {
   const existing = tabRescanTimers.get(tabId);
   if (existing) clearTimeout(existing);
 
+  const scheduledNavigationId = getNavigationId(tabId);
   const timer = setTimeout(() => {
     tabRescanTimers.delete(tabId);
-    chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE }, () => {
+    if (getNavigationId(tabId) !== scheduledNavigationId) return;
+    chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE, scanPhase: "PRELIMINARY" }, () => {
       chrome.runtime.lastError;
+    });
+    loadSettings().then((settings) => {
+      setTimeout(() => {
+        if (getNavigationId(tabId) !== scheduledNavigationId) return;
+        chrome.tabs.sendMessage(tabId, { type: RESCAN_MESSAGE, scanPhase: "INTERACTION_FINAL" }, () => {
+          chrome.runtime.lastError;
+        });
+      }, settings.interactionObservationMs);
     });
   }, Math.max(100, Number(delayMs) || 300));
 
@@ -284,6 +426,9 @@ function getNetworkSignals(tabId) {
     thirdPartyWriteRequests: 0,
     insecureWriteRequests: 0,
     suspiciousRequestDomains: [],
+    unknownSensitiveDestinations: [],
+    executableDownloadDomains: [],
+    destinationRoleCounts: {},
     requestsAfterFormSubmit: 0,
     requestsAfterPasswordFocus: 0,
     writeRequestsAfterFormSubmit: 0,
@@ -294,10 +439,23 @@ function getNetworkSignals(tabId) {
     crossDomainSensitiveWriteRequests: 0,
     beaconOrPingAfterSensitiveInput: 0,
     queryBearingGetAfterSensitiveForm: 0,
+    mixedContentRequestCount: 0,
+    insecureActiveContentRequestCount: 0,
+    responseHeadersObserved: false,
+    hasContentSecurityPolicy: false,
+    hasStrictTransportSecurity: false,
+    hasXContentTypeOptions: false,
+    hasReferrerPolicy: false,
+    hasPermissionsPolicy: false,
     downloadClickCount: 0,
     formSubmitThenCrossDomainRedirectCount: 0,
     downloadAfterFormSubmitCount: 0,
     recentEvents: [],
+    pageEventsAccepted: 0,
+    pageEventsRejected: 0,
+    lastPageEventRejectReason: "",
+    retroactiveCorrelations: 0,
+    recentPotentialSensitiveRequests: [],
     lastFormSubmitAt: 0,
     lastPasswordFocusAt: 0,
     lastFormWasSensitive: false,
@@ -312,6 +470,8 @@ function getNetworkSignals(tabId) {
 function exportNetworkSignals(tabId) {
   const signals = getNetworkSignals(tabId);
   return {
+    sensitiveInteractionObserved: Boolean(signals.lastPasswordFocusAt && Date.now() - signals.lastPasswordFocusAt < TEMPORAL_WINDOW_MS),
+    lastSensitiveKind: String(signals.lastSensitiveKind || "").slice(0, 40),
     totalRequests: signals.totalRequests,
     thirdPartyRequests: signals.thirdPartyRequests,
     thirdPartyScriptRequests: signals.thirdPartyScriptRequests,
@@ -332,6 +492,13 @@ function exportNetworkSignals(tabId) {
     beaconOrPingAfterSensitiveInput: signals.beaconOrPingAfterSensitiveInput,
     queryBearingGetAfterSensitiveForm: signals.queryBearingGetAfterSensitiveForm,
     suspiciousRequestDomains: signals.suspiciousRequestDomains.slice(0, 30),
+    unknownSensitiveDestinations: signals.unknownSensitiveDestinations.slice(0, 20),
+    executableDownloadDomains: signals.executableDownloadDomains.slice(0, 10),
+    destinationRoles: Object.keys(signals.destinationRoleCounts),
+    destinationRoleCounts: { ...signals.destinationRoleCounts },
+    pageEventsAccepted: signals.pageEventsAccepted,
+    pageEventsRejected: signals.pageEventsRejected,
+    retroactiveCorrelations: signals.retroactiveCorrelations,
     temporalSignals: {
       formSubmitThenThirdPartyCount: signals.requestsAfterFormSubmit,
       passwordFocusThenThirdPartyCount: signals.requestsAfterPasswordFocus,
@@ -348,69 +515,285 @@ function exportNetworkSignals(tabId) {
   };
 }
 
-function addTimelineEvent(signals, type, at) {
+function exportSecuritySignals(tabId) {
+  const signals = getNetworkSignals(tabId);
+  const protectedHeaders = [
+    signals.hasContentSecurityPolicy,
+    signals.hasStrictTransportSecurity,
+    signals.hasXContentTypeOptions,
+    signals.hasReferrerPolicy,
+    signals.hasPermissionsPolicy
+  ].filter(Boolean).length;
+  return {
+    responseHeadersObserved: Boolean(signals.responseHeadersObserved),
+    hasContentSecurityPolicy: Boolean(signals.hasContentSecurityPolicy),
+    hasStrictTransportSecurity: Boolean(signals.hasStrictTransportSecurity),
+    hasXContentTypeOptions: Boolean(signals.hasXContentTypeOptions),
+    hasReferrerPolicy: Boolean(signals.hasReferrerPolicy),
+    hasPermissionsPolicy: Boolean(signals.hasPermissionsPolicy),
+    missingSecurityHeaderCount: signals.responseHeadersObserved ? 5 - protectedHeaders : 0,
+    mixedContentRequestCount: Number(signals.mixedContentRequestCount) || 0,
+    insecureActiveContentRequestCount: Number(signals.insecureActiveContentRequestCount) || 0
+  };
+}
+
+function addTimelineEvent(signals, type, at, metadata = {}) {
   signals.recentEvents = Array.isArray(signals.recentEvents) ? signals.recentEvents : [];
-  signals.recentEvents.push({ type, at });
+  signals.recentEvents.push({ type, at, ...metadata });
   signals.recentEvents = signals.recentEvents
     .filter((event) => at - event.at <= TEMPORAL_WINDOW_MS)
     .slice(-40);
 }
 
-function preserveOrClearTemporalState(tabId) {
-  const signals = tabNetworkSignals.get(tabId);
-  const now = Date.now();
-  if (!signals || (!signals.lastFormSubmitAt && !signals.lastPasswordFocusAt)) {
-    tabNetworkSignals.delete(tabId);
-    return;
-  }
+function rememberPotentialSensitiveRequest(signals, candidate) {
+  const relevant = candidate.isUnknownWrite || candidate.isUnknownBeacon || candidate.isQueryImage ||
+    (candidate.isWriteRequest && candidate.isInsecure);
+  if (!relevant) return;
+  signals.recentPotentialSensitiveRequests = Array.isArray(signals.recentPotentialSensitiveRequests)
+    ? signals.recentPotentialSensitiveRequests : [];
+  signals.recentPotentialSensitiveRequests.push({ ...candidate, correlated: false });
+  signals.recentPotentialSensitiveRequests = signals.recentPotentialSensitiveRequests
+    .filter((item) => candidate.at - item.at <= SENSITIVE_REQUEST_WINDOW_MS)
+    .slice(-20);
+}
 
-  const lastInteraction = Math.max(signals.lastFormSubmitAt || 0, signals.lastPasswordFocusAt || 0);
-  if (now - lastInteraction > TEMPORAL_WINDOW_MS) {
-    tabNetworkSignals.delete(tabId);
-    return;
-  }
+function correlatePendingSensitiveRequests(signals, now, trigger) {
+  const candidates = Array.isArray(signals.recentPotentialSensitiveRequests) ? signals.recentPotentialSensitiveRequests : [];
+  for (const candidate of candidates) {
+    if (candidate.correlated || now - candidate.at < 0 || now - candidate.at > SENSITIVE_REQUEST_WINDOW_MS) continue;
+    const effects = ArgusNetworkCorrelation.correlationEffects(candidate, trigger);
+    if (!effects.accept) continue;
 
-  signals.totalRequests = 0;
-  signals.thirdPartyRequests = 0;
-  signals.thirdPartyScriptRequests = 0;
-  signals.thirdPartyFrameRequests = 0;
-  signals.thirdPartyXHRRequests = 0;
-  signals.insecureHttpRequests = 0;
-  signals.writeRequests = 0;
-  signals.thirdPartyWriteRequests = 0;
-  signals.insecureWriteRequests = 0;
-  signals.suspiciousRequestDomains = [];
-  signals.updatedAt = now;
-  tabNetworkSignals.set(tabId, signals);
+    candidate.correlated = true;
+    signals.retroactiveCorrelations += 1;
+
+    // A cross-domain write that arrived first is surfaced as third-party-after-form
+    // in the live path; mirror that timeline event here for parity.
+    if (effects.counters.requestsAfterFormSubmit) {
+      addTimelineEvent(signals, "THIRD_PARTY_AFTER_FORM", now, networkEventMeta(candidate.details, candidate.requestMeta, candidate.destinationRole, true));
+    }
+    for (const [counter, amount] of Object.entries(effects.counters)) {
+      signals[counter] = (Number(signals[counter]) || 0) + amount;
+    }
+    if (effects.destination) {
+      addLimited(signals.unknownSensitiveDestinations, candidate.requestMeta.hostname, 20);
+    }
+    for (const event of effects.timeline) {
+      addTimelineEvent(signals, event.type, now, networkEventMeta(candidate.details, candidate.requestMeta, event.roleOverride || candidate.destinationRole, true));
+    }
+  }
+}
+
+// Destination roles that classifyDestinationRole assigns to recognized providers,
+// CDNs, and same-site traffic. Used to decide whether a beacon/ping destination
+// is "unknown" independently of interaction timing.
+function isKnownDestinationRole(role) {
+  return [
+    "KNOWN_IDENTITY_PROVIDER", "KNOWN_PAYMENT_PROVIDER", "KNOWN_ANALYTICS", "KNOWN_AD_NETWORK",
+    "CDN", "SSO_REDIRECT", "SAME_SITE_API", "STATIC_ASSET", "FIRST_PARTY_WRITE"
+  ].includes(role);
+}
+
+function classifyDestinationRole({ details, requestMeta, referenceDomain, isThirdParty, isWriteRequest, followsSensitiveInteraction }) {
+  const domain = requestMeta.hostname;
+  const path = String(requestMeta.pathname || "").toLowerCase();
+  if (/\.(apk|exe|msi|dmg|pkg)(?:$|\/)/i.test(path)) return "EXECUTABLE_DOWNLOAD_SOURCE";
+  if (!isThirdParty && isWriteRequest) return "FIRST_PARTY_WRITE";
+  if (!isThirdParty && ["xmlhttprequest", "fetch"].includes(details.type)) return "SAME_SITE_API";
+  if (["image", "stylesheet", "font", "media"].includes(details.type)) return isThirdParty ? "STATIC_ASSET" : "SAME_SITE_API";
+  if (domainMatchesAny(domain, KNOWN_IDENTITY_DOMAINS)) return details.type === "main_frame" ? "SSO_REDIRECT" : "KNOWN_IDENTITY_PROVIDER";
+  if (domainMatchesAny(domain, KNOWN_PAYMENT_DOMAINS)) return "KNOWN_PAYMENT_PROVIDER";
+  if (domainMatchesAny(domain, KNOWN_ANALYTICS_DOMAINS)) return "KNOWN_ANALYTICS";
+  if (domainMatchesAny(domain, KNOWN_AD_DOMAINS)) return "KNOWN_AD_NETWORK";
+  if (CDN_DOMAIN_HINTS.some((hint) => domain.includes(hint))) return "CDN";
+  if (isThirdParty && ["beacon", "ping"].includes(details.type) && followsSensitiveInteraction) return "UNKNOWN_BEACON";
+  if (isThirdParty && isWriteRequest) return "UNKNOWN_WRITE_DESTINATION";
+  return isThirdParty ? "UNKNOWN_READ_DESTINATION" : "SAME_SITE_API";
+}
+
+function domainMatchesAny(domain, candidates) {
+  return candidates.some((candidate) => domain === candidate || domain.endsWith(`.${candidate}`));
+}
+
+function networkEventMeta(details, requestMeta, destinationRole, sensitiveContextPresent) {
+  return {
+    eventType: String(details.type || "request").toUpperCase(),
+    scanPhase: sensitiveContextPresent ? "POST_INTERACTION" : "POST_LOAD",
+    destinationRole,
+    destination: requestMeta.hostname,
+    method: String(details.method || "GET").toUpperCase(),
+    protocol: requestMeta.protocol,
+    frameId: Number(details.frameId) || 0,
+    sensitiveContextPresent: Boolean(sensitiveContextPresent),
+    evidenceIds: []
+  };
+}
+
+function exportInteractionTimeline(tabId, navigationId) {
+  const signals = getNetworkSignals(tabId);
+  return signals.recentEvents.slice(-40).map((event) => ({
+    tabId,
+    navigationId,
+    frameId: Number(event.frameId) || 0,
+    timestamp: new Date(event.at).toISOString(),
+    eventType: event.eventType || event.type,
+    scanPhase: event.scanPhase || phaseForEvent(event.type),
+    destinationRole: event.destinationRole || "NONE",
+    method: event.method || "NONE",
+    protocol: event.protocol || "NONE",
+    sensitiveContextPresent: Boolean(event.sensitiveContextPresent || /SENSITIVE|PASSWORD|FORM_SUBMIT/.test(event.type)),
+    evidenceIds: Array.isArray(event.evidenceIds) ? event.evidenceIds.slice(0, 8) : []
+  }));
+}
+
+function phaseForEvent(type) {
+  if (/DOWNLOAD/.test(type)) return "DOWNLOAD";
+  if (/FORM_SUBMIT/.test(type)) return "FORM_SUBMIT";
+  if (/PASSWORD|SENSITIVE/.test(type)) return "SENSITIVE_INPUT";
+  if (/AFTER|BEACON|WRITE|REDIRECT/.test(type)) return "POST_INTERACTION";
+  return "POST_LOAD";
+}
+
+function clearPageState(tabId, nextPageKey) {
+  if (!navigationGuard) return;
+  tabNetworkSignals.delete(tabId);
+  tabPageDomains.delete(tabId);
+  if (nextPageKey) tabPageKeys.set(tabId, String(nextPageKey));
+  else tabPageKeys.delete(tabId);
+  tabPageEpochs.set(tabId, (tabPageEpochs.get(tabId) || 0) + 1);
+  const session = navigationGuard.begin(tabId, nextPageKey, tabPageEpochs.get(tabId));
+  tabNavigationIds.set(tabId, session.navigationId);
+
+  const timer = tabRescanTimers.get(tabId);
+  if (timer) clearTimeout(timer);
+  tabRescanTimers.delete(tabId);
+
+  const previous = tabClearTasks.get(tabId) || Promise.resolve();
+  const task = previous
+    .catch(() => undefined)
+    .then(() => clearLastScan(tabId))
+    .catch((error) => console.warn("[Project Argus] failed to clear stale tab scan", error));
+  tabClearTasks.set(tabId, task);
+  task.finally(() => {
+    if (tabClearTasks.get(tabId) === task) tabClearTasks.delete(tabId);
+  });
+}
+
+// Fail-closed result when the engine modules are not loaded. Deliberately NOT
+// SAFE — a green badge would falsely reassure the user that the page was checked.
+function engineUnavailableResult(pageData, sender) {
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  const scanPhase = String(pageData && pageData.scanPhase || "FINAL").toUpperCase();
+  return {
+    url: String(pageData && pageData.url || ""),
+    domain: String(pageData && pageData.domain || "").toLowerCase(),
+    tabId,
+    timestamp: new Date().toISOString(),
+    isTrustedDomain: false,
+    isSearchEnginePage: false,
+    risk: {
+      score: 0, riskScore: 0, level: "UNAVAILABLE", status: "UNAVAILABLE", category: "UNAVAILABLE",
+      confidence: "LOW", evidenceLevel: "NONE", evidenceIds: [], evidenceGroups: [],
+      reasons: ["Project Argus could not scan this page: the local engine failed to load. Reload the extension at chrome://extensions."],
+      source: "ENGINE_UNAVAILABLE", policyVersion: POLICY_VERSION,
+      warningAllowed: false, overlayAllowed: false, shouldWarn: false
+    },
+    modelStatus: { mode: "ENGINE_UNAVAILABLE", externalAi: false, engine: "ARGUS_EVIDENCE_ENGINE", message: "Local engine failed to load." },
+    scanPhase, isFinal: true,
+    modelVersion: MODEL_VERSION, policyVersion: POLICY_VERSION, reportSchemaVersion: REPORT_SCHEMA_VERSION,
+    source: "ENGINE_UNAVAILABLE"
+  };
 }
 
 async function handlePageScan(pageData, sender) {
+  if (!engineReady) {
+    return engineUnavailableResult(pageData, sender);
+  }
   const tabId = sender && sender.tab ? sender.tab.id : null;
+  const pageEpoch = Number.isInteger(tabId) ? (tabPageEpochs.get(tabId) || 0) : 0;
+  if (Number.isInteger(tabId) && tabClearTasks.has(tabId)) {
+    await tabClearTasks.get(tabId);
+  }
+  if (Number.isInteger(tabId) && pageEpoch !== (tabPageEpochs.get(tabId) || 0)) {
+    throw new Error("Stale scan ignored after page navigation.");
+  }
+  if (Number.isInteger(tabId) && tabPageKeys.has(tabId) && pageData && pageData.pageKey !== tabPageKeys.get(tabId)) {
+    throw new Error("Stale scan ignored because the page identity changed.");
+  }
   const settings = await loadSettings();
   const trustedDomains = await loadTrustedDomains();
   const riskyCategories = await loadRiskyCategories();
   const detectionPolicy = await loadDetectionPolicy();
+  const brandRegistry = await loadBrandRegistry();
+  const scanPhase = String(pageData && pageData.scanPhase || "FINAL").toUpperCase();
   const signals = normalizeSignals(pageData, trustedDomains);
+  signals.identitySignals = ArgusBrandIdentity.analyze({ ...pageData, ...signals }, brandRegistry);
+  if (["FINAL", "INTERACTION_FINAL"].includes(scanPhase) && signals.identitySignals.visualReferenceAvailable && signals.identitySignals.domainMismatch) {
+    const visualHashes = await hashLogoCandidates(pageData && pageData.logoCandidates);
+    if (visualHashes.length > 0) signals.identitySignals = ArgusBrandIdentity.analyze({ ...pageData, ...signals, visualHashes }, brandRegistry);
+  }
   if (Number.isInteger(tabId) && tabId >= 0) {
     tabPageDomains.set(tabId, signals.domain);
+    if (signals.pageKey) {
+      tabPageKeys.set(tabId, signals.pageKey);
+      navigationGuard.note(tabId, signals.pageKey);
+    }
     signals.networkSignals = exportNetworkSignals(tabId);
+    signals.securitySignals = mergeSecuritySignals(signals.securitySignals, exportSecuritySignals(tabId));
   }
+  const reputation = await lookupReputation(signals.domain, settings);
   const ruleRisk = calculateRuleRisk(signals, riskyCategories, detectionPolicy);
+  addReputationEvidence(ruleRisk, reputation);
+  const navigationId = getNavigationId(tabId);
+  const frameId = Number(sender && sender.frameId) || 0;
+  const policyDecision = ArgusEvidencePolicy.decide({
+    legacyRisk: ruleRisk,
+    context: {
+      tabId, navigationId, frameId, scanPhase,
+      timestamp: new Date().toISOString(),
+      isTrustedDomain: signals.isTrustedDomain,
+      isSearchEnginePage: signals.isSearchEnginePage,
+      reputation,
+      identitySignals: signals.identitySignals,
+      sensitivityMode: settings.sensitivityMode,
+      sensitiveInteractionObserved: Boolean(signals.networkSignals && signals.networkSignals.sensitiveInteractionObserved),
+      networkSignals: signals.networkSignals,
+      destinationRoles: signals.networkSignals && signals.networkSignals.destinationRoles
+    }
+  });
   const modelStatus = {
-    mode: "LOCAL_MODEL",
+    mode: ruleRisk.source || "LOCAL_ENSEMBLE",
     externalAi: false,
     engine: "ARGUS_EVIDENCE_ENGINE",
-    policyVersion: detectionPolicy.version || "3.0.0",
-    message: "Project Argus data-flow priority engine active."
+    policyVersion: POLICY_VERSION,
+    modelVersion: ruleRisk.modelAnalysis && ruleRisk.modelAnalysis.version || "unavailable",
+    message: "Project Argus local evidence ensemble active."
   };
 
+  // Single authority: policyDecision is spread AFTER ruleRisk so the evidence
+  // decision policy owns every decision field (status, level, score, riskScore,
+  // confidence, reasons, warningAllowed, source, policyVersion). ruleRisk only
+  // contributes evidence data and advisory magnitude (legacyScore/legacyLevel).
+  // The two version concepts are kept distinct: policyVersion = decision policy
+  // (evidence-first-v4); detectionPolicyVersion = the weights/config version.
   const finalRisk = {
     ...ruleRisk,
-    source: "LOCAL_MODEL"
+    ...policyDecision,
+    category: policyDecision.status === "SAFE" ? "SAFE" : ["MONITORING", "UNCERTAIN"].includes(policyDecision.status) ? "UNCONFIRMED" : policyDecision.status === "RISKY_CONTEXT" ? policyDecision.riskContext : ruleRisk.category,
+    evidence: ruleRisk.evidence || [],
+    toolResults: ruleRisk.toolResults || [],
+    modelAnalysis: ruleRisk.modelAnalysis || null,
+    policyVersion: POLICY_VERSION,
+    detectionPolicyVersion: ruleRisk.detectionPolicyVersion || (detectionPolicy && detectionPolicy.version) || "unknown",
+    legacyLevel: ruleRisk.level,
+    legacyScore: ruleRisk.score
   };
 
-  const shouldWarn = shouldShowWarning(finalRisk, signals, settings);
-  finalRisk.shouldWarn = shouldWarn;
+  const isFinal = scanPhase === "FINAL" || scanPhase === "INTERACTION_FINAL" || !settings.progressiveScan;
+  finalRisk.shouldWarn = isFinal && policyDecision.warningAllowed;
+  finalRisk.warningAllowed = isFinal && policyDecision.warningAllowed;
+  finalRisk.overlayEligible = isFinal && policyDecision.overlayAllowed;
+  finalRisk.overlayAllowed = false;
   finalRisk.demoMode = settings.demoMode;
 
   const scanResult = {
@@ -421,6 +804,31 @@ async function handlePageScan(pageData, sender) {
     ruleBasedRisk: ruleRisk,
     modelStatus,
     settings: publicSettings(settings),
+    scanPhase,
+    isFinal,
+    navigationId,
+    frameId,
+    modelVersion: MODEL_VERSION,
+    policyVersion: POLICY_VERSION,
+    detectionPolicyVersion: finalRisk.detectionPolicyVersion,
+    reportSchemaVersion: REPORT_SCHEMA_VERSION,
+    reputation,
+    interactionTimeline: exportInteractionTimeline(tabId, navigationId),
+    shadowComparison: settings.shadowMode ? {
+      legacyStatus: ruleRisk.level,
+      legacyScore: ruleRisk.score,
+      detectionPolicyVersion: finalRisk.detectionPolicyVersion,
+      evidenceFirstStatus: finalRisk.status,
+      evidenceFirstScore: finalRisk.score,
+      evidenceIds: finalRisk.evidenceIds,
+      modelScore: finalRisk.model && finalRisk.model.score,
+      modelOnly: finalRisk.modelOnly,
+      overlayAllowed: false,
+      overlayEligible: finalRisk.overlayEligible,
+      timestamp: new Date().toISOString(),
+      modelVersion: MODEL_VERSION,
+      policyVersion: POLICY_VERSION
+    } : null,
     source: finalRisk.source,
     debug: {
       domain: signals.domain,
@@ -430,9 +838,28 @@ async function handlePageScan(pageData, sender) {
       finalScore: finalRisk.score,
       finalLevel: finalRisk.level,
       confidence: finalRisk.confidence,
-      policyVersion: finalRisk.policyVersion,
-      model: "LOCAL_MODEL",
-      warningThreshold: settings.warningThreshold
+      policyVersion: POLICY_VERSION,
+      model: finalRisk.source,
+      warningThreshold: settings.warningThreshold,
+      pipeline: {
+        engineSource: ruleRisk.source || "UNKNOWN",
+        engineEvidenceIds: (ruleRisk.evidence || []).map((item) => item.id).slice(0, 30),
+        engineDirectEvidenceIds: finalRisk.engineDirectEvidenceIds || [],
+        telemetryDirectEvidenceIds: finalRisk.telemetryDirectEvidenceIds || [],
+        evidenceGroups: finalRisk.evidenceGroups || [],
+        observedEvidenceGroups: finalRisk.observedEvidenceGroups || [],
+        modelOnly: Boolean(finalRisk.modelOnly),
+        scanPhase,
+        navigationId,
+        telemetry: {
+          pageEventsAccepted: Number(signals.networkSignals && signals.networkSignals.pageEventsAccepted) || 0,
+          pageEventsRejected: Number(signals.networkSignals && signals.networkSignals.pageEventsRejected) || 0,
+          retroactiveCorrelations: Number(signals.networkSignals && signals.networkSignals.retroactiveCorrelations) || 0,
+          sensitiveWrites: Number(signals.networkSignals && signals.networkSignals.sensitiveWriteRequestsAfterFormSubmit) || 0,
+          crossDomainSensitiveWrites: Number(signals.networkSignals && signals.networkSignals.crossDomainSensitiveWriteRequests) || 0,
+          sensitiveBeacons: Number(signals.networkSignals && signals.networkSignals.beaconOrPingAfterSensitiveInput) || 0
+        }
+      }
     }
   };
 
@@ -444,17 +871,10 @@ async function handlePageScan(pageData, sender) {
     suspiciousDomainSignals: signals.suspiciousDomainSignals
   });
 
-  await saveScanResult(scanResult);
-
-  if (Number.isInteger(tabId) && tabId >= 0 && shouldWarn) {
-    chrome.tabs.sendMessage(tabId, {
-      type: WARNING_MESSAGE,
-      payload: {
-        ...finalRisk,
-        settings: scanResult.settings
-      }
-    });
+  if (Number.isInteger(tabId) && pageEpoch !== (tabPageEpochs.get(tabId) || 0)) {
+    throw new Error("Stale scan result discarded after page navigation.");
   }
+  await saveScanResult(scanResult);
 
   return scanResult;
 }
@@ -464,7 +884,12 @@ async function loadTrustedDomains() {
     return trustedDomainsCache;
   }
 
-  trustedDomainsCache = await fetchJson("trusted_domains.json", []);
+  // Baseline trusted domains live in the shared module (single source with
+  // content.js — F8). trusted_domains.json holds optional local additions unioned
+  // on top; content.js sees the same baseline, so the two can no longer diverge.
+  const baseline = SHARED_LISTS.TRUSTED_DOMAINS || [];
+  const additions = await fetchJson("trusted_domains.json", []);
+  trustedDomainsCache = unique(baseline.concat(toArray(additions)));
   return trustedDomainsCache;
 }
 
@@ -485,6 +910,27 @@ async function loadDetectionPolicy() {
   const fallbackPolicy = typeof ArgusEngine !== "undefined" ? ArgusEngine.DEFAULT_POLICY : {};
   detectionPolicyCache = await fetchJson("engine/detection_policy.json", fallbackPolicy);
   return detectionPolicyCache;
+}
+
+async function loadBrandRegistry() {
+  if (brandRegistryCache) return brandRegistryCache;
+  const bootstrap = await fetchJson("engine/brand_registry.json", { schemaVersion: 1, version: "unavailable", brands: [] });
+  brandRegistryCache = ArgusBrandIdentity.validateRegistry(bootstrap) ? bootstrap : { schemaVersion: 1, version: "invalid", brands: [] };
+  try {
+    const stored = await chrome.storage.local.get(["argusSignedBrandRegistry"]);
+    const envelope = stored.argusSignedBrandRegistry;
+    if (envelope && await ArgusBrandIdentity.verifySignedEnvelope(envelope) && ArgusBrandIdentity.validateRegistry(envelope.payload) &&
+      compareRegistryVersions(envelope.payload.version, brandRegistryCache.version) >= 0) {
+      brandRegistryCache = envelope.payload;
+    }
+  } catch (error) {
+    console.warn("[Project Argus] signed brand registry was rejected; bundled registry remains active.", error);
+  }
+  return brandRegistryCache;
+}
+
+function compareRegistryVersions(left, right) {
+  return String(left || "").localeCompare(String(right || ""), undefined, { numeric: true, sensitivity: "base" });
 }
 
 async function fetchJson(path, fallback) {
@@ -510,6 +956,106 @@ async function loadSettings() {
   }
 }
 
+async function lookupReputation(domain, settings) {
+  const hostname = String(domain || "").toLowerCase().replace(/^\.+|\.+$/g, "");
+  const unavailable = { verdict: "UNAVAILABLE", confidence: "LOW", sources: [], categories: [], checkedAt: new Date().toISOString() };
+  if (!settings.reputationEnabled || !hostname) return { ...unavailable, verdict: "DISABLED" };
+
+  const cached = reputationCache.get(hostname);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const response = await fetch(settings.reputationEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hostname }),
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const raw = await response.json();
+    const value = {
+      verdict: ["UNKNOWN", "TRUSTED", "RISKY_CONTEXT", "RISKY_CATEGORY", "MALICIOUS"].includes(String(raw.verdict).toUpperCase()) ? (String(raw.verdict).toUpperCase() === "RISKY_CATEGORY" ? "RISKY_CONTEXT" : String(raw.verdict).toUpperCase()) : "UNKNOWN",
+      confidence: ["LOW", "MEDIUM", "HIGH"].includes(String(raw.confidence).toUpperCase()) ? String(raw.confidence).toUpperCase() : "LOW",
+      sources: toArray(raw.sources).slice(0, 8).map(String),
+      categories: toArray(raw.categories).slice(0, 8).map(String),
+      firstSeen: raw.firstSeen ? String(raw.firstSeen).slice(0, 40) : null,
+      lastSeen: raw.lastSeen ? String(raw.lastSeen).slice(0, 40) : null,
+      checkedAt: String(raw.checkedAt || new Date().toISOString()).slice(0, 40)
+    };
+    const ttl = value.verdict === "MALICIOUS" ? 60 * 60 * 1000 : 15 * 60 * 1000;
+    reputationCache.set(hostname, { value, expiresAt: Date.now() + ttl });
+    return value;
+  } catch (error) {
+    return unavailable;
+  }
+}
+
+async function hashLogoCandidates(values) {
+  const urls = toArray(values).slice(0, 5).filter((value) => {
+    try { return new URL(String(value)).protocol === "https:"; } catch (error) { return false; }
+  });
+  const hashes = [];
+  for (const url of urls) {
+    const cached = visualHashCache.get(url);
+    if (cached && cached.expiresAt > Date.now()) {
+      if (cached.hash) hashes.push(cached.hash);
+      continue;
+    }
+    const hash = await requestLocalVisualHash(url);
+    visualHashCache.set(url, { hash, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+    if (hash) hashes.push(hash);
+  }
+  return unique(hashes);
+}
+
+async function requestLocalVisualHash(url) {
+  if (!chrome.offscreen || typeof chrome.offscreen.createDocument !== "function") return null;
+  try {
+    await ensureOffscreenDocument();
+    const response = await chrome.runtime.sendMessage({ type: "ARGUS_HASH_IMAGE", url });
+    return response && response.ok && /^[0-9a-f]{16}$/i.test(response.hash) ? response.hash.toLowerCase() : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function ensureOffscreenDocument() {
+  const offscreenUrl = chrome.runtime.getURL("offscreen.html");
+  if (chrome.runtime.getContexts) {
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [offscreenUrl] });
+    if (contexts.length > 0) return;
+  }
+  try {
+    await chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["BLOBS"],
+      justification: "Decode small public logo and favicon images locally to compute privacy-safe perceptual hashes."
+    });
+  } catch (error) {
+    if (!/single offscreen|already exists/i.test(String(error && error.message || error))) throw error;
+  }
+}
+
+function addReputationEvidence(ruleRisk, reputation) {
+  if (!ruleRisk || !Array.isArray(ruleRisk.evidence) || !reputation) return;
+  if (reputation.verdict === "MALICIOUS") {
+    ruleRisk.evidence.push({
+      id: "REPUTATION_CONFIRMED_MALICIOUS", tool: "REPUTATION_ANALYZER", category: "THREAT_INTELLIGENCE",
+      priority: 1, points: 90, confidence: reputation.confidence === "HIGH" ? 0.98 : 0.9,
+      severity: "critical", message: "A configured threat-intelligence source identifies this hostname as malicious.", decisive: true
+    });
+  } else if (reputation.verdict === "RISKY_CONTEXT") {
+    ruleRisk.evidence.push({
+      id: "REPUTATION_RISKY_CONTEXT", tool: "REPUTATION_ANALYZER", category: "GAMBLING_UNVERIFIED",
+      priority: 2, points: 20, confidence: reputation.confidence === "HIGH" ? 0.9 : 0.75,
+      severity: "medium", message: "A reviewed local or external source classifies this hostname as an unverified risky operator.", decisive: false
+    });
+  }
+}
+
 function normalizeSettings(settings) {
   const raw = settings && typeof settings === "object" ? settings : {};
   const warningThreshold = Math.max(0, Math.min(100, Math.round(Number(raw.warningThreshold ?? DEFAULT_SETTINGS.warningThreshold))));
@@ -517,16 +1063,62 @@ function normalizeSettings(settings) {
   return {
     warningThreshold,
     showBadgeOnSafePages: raw.showBadgeOnSafePages !== false,
-    demoMode: raw.demoMode !== false
+    demoMode: raw.demoMode !== false,
+    progressiveScan: raw.progressiveScan !== false,
+    observationWindowMs: Math.max(2000, Math.min(10000, Number(raw.observationWindowMs) || DEFAULT_SETTINGS.observationWindowMs)),
+    interactionObservationMs: Math.max(2000, Math.min(15000, Number(raw.interactionObservationMs) || DEFAULT_SETTINGS.interactionObservationMs)),
+    sendFalsePositiveFeedback: raw.sendFalsePositiveFeedback !== false,
+    feedbackEndpoint: normalizeFeedbackEndpoint(raw.feedbackEndpoint),
+    reputationEnabled: raw.reputationEnabled !== false,
+    reputationEndpoint: normalizeLoopbackEndpoint(raw.reputationEndpoint, DEFAULT_SETTINGS.reputationEndpoint),
+    sensitivityMode: ["CONSERVATIVE", "BALANCED", "PROTECTIVE"].includes(String(raw.sensitivityMode || "").toUpperCase()) ? String(raw.sensitivityMode).toUpperCase() : DEFAULT_SETTINGS.sensitivityMode,
+    shadowMode: raw.shadowMode !== false
   };
+}
+
+function normalizeFeedbackEndpoint(value) {
+  // Loopback-only enforcement lives in the shared ArgusFeedbackEndpoint module so
+  // the worker and the options page agree (F16). Falls back to the default local
+  // collector if the module is unavailable (degraded mode).
+  return typeof ArgusFeedbackEndpoint !== "undefined"
+    ? ArgusFeedbackEndpoint.normalizeFeedbackEndpoint(value, DEFAULT_SETTINGS.feedbackEndpoint)
+    : DEFAULT_SETTINGS.feedbackEndpoint;
+}
+
+function isLoopbackHost(hostname) {
+  return typeof ArgusFeedbackEndpoint !== "undefined" && ArgusFeedbackEndpoint.isLoopbackHost(hostname);
+}
+
+function normalizeLoopbackEndpoint(value, fallback) {
+  try {
+    const parsed = new URL(String(value || fallback));
+    return parsed.protocol === "http:" && isLoopbackHost(parsed.hostname) ? parsed.toString() : fallback;
+  } catch (error) {
+    return fallback;
+  }
 }
 
 function publicSettings(settings) {
   return {
     warningThreshold: settings.warningThreshold,
     showBadgeOnSafePages: settings.showBadgeOnSafePages,
-    demoMode: settings.demoMode
+    demoMode: settings.demoMode,
+    progressiveScan: settings.progressiveScan,
+    observationWindowMs: settings.observationWindowMs,
+    interactionObservationMs: settings.interactionObservationMs,
+    reputationEnabled: settings.reputationEnabled,
+    sensitivityMode: settings.sensitivityMode,
+    shadowMode: settings.shadowMode
   };
+}
+
+function getNavigationId(tabId) {
+  if (!navigationGuard || !Number.isInteger(tabId) || tabId < 0) return "nav-detached";
+  if (!tabNavigationIds.has(tabId)) {
+    const session = navigationGuard.ensure(tabId, tabPageKeys.get(tabId), tabPageEpochs.get(tabId) || 0);
+    tabNavigationIds.set(tabId, session.navigationId);
+  }
+  return tabNavigationIds.get(tabId);
 }
 
 function normalizeSignals(data, trustedDomains) {
@@ -540,6 +1132,12 @@ function normalizeSignals(data, trustedDomains) {
   const foundAdultKeywords = toArray(pageData.foundAdultKeywords);
   const foundBankingKeywords = toArray(pageData.foundBankingKeywords);
   const foundInvestmentKeywords = toArray(pageData.foundInvestmentKeywords);
+  const foundPaymentWalletKeywords = toArray(pageData.foundPaymentWalletKeywords);
+  const foundGovernmentKeywords = toArray(pageData.foundGovernmentKeywords);
+  const foundTelecomUtilityKeywords = toArray(pageData.foundTelecomUtilityKeywords);
+  const foundDeliveryKeywords = toArray(pageData.foundDeliveryKeywords);
+  const foundPlatformAccountKeywords = toArray(pageData.foundPlatformAccountKeywords);
+  const foundJobCharityFeeKeywords = toArray(pageData.foundJobCharityFeeKeywords);
   const foundTechSupportKeywords = toArray(pageData.foundTechSupportKeywords);
   const foundPopupAbuseKeywords = toArray(pageData.foundPopupAbuseKeywords);
   const foundFakeShoppingKeywords = toArray(pageData.foundFakeShoppingKeywords);
@@ -548,6 +1146,8 @@ function normalizeSignals(data, trustedDomains) {
   const suspiciousDomainSignals = toArray(pageData.suspiciousDomainSignals).concat(getSuspiciousDomainSignals(domain));
   const domainCategorySignals = getDomainCategorySignals(domain);
   const dataLeakSignals = normalizeDataLeakSignals(pageData.dataLeakSignals);
+  const securitySignals = normalizeSecuritySignals(pageData.securitySignals);
+  const urlLexicalSignals = normalizeUrlLexicalSignals(pageData.urlLexicalSignals);
   const trustedByFile = trustedDomains.some((trustedDomain) => isDomainMatch(domain, trustedDomain));
   const isTrusted = Boolean(pageData.isTrustedDomain) || trustedByFile;
   const isSearchEngine = Boolean(pageData.isSearchEnginePage) || isSearchEnginePage(url, domain, pathname);
@@ -573,13 +1173,17 @@ function normalizeSignals(data, trustedDomains) {
     url,
     domain,
     pathname,
+    pageKey: String(pageData.pageKey || "").slice(0, 500),
     pageProtocol: String(pageData.pageProtocol || parseUrlMetadata(url).protocol || ""),
+    urlLexicalSignals,
     isTrustedDomain: isTrusted,
     isSearchEnginePage: isSearchEngine,
     passwordFieldCount: Number(pageData.passwordFieldCount) || 0,
     hasPasswordField: Boolean(pageData.hasPasswordField) || Number(pageData.passwordFieldCount) > 0,
     hasOTP: Boolean(pageData.hasOTP),
     hasLoginKeyword: Boolean(pageData.hasLoginKeyword),
+    hasSensitiveActionSurface: Boolean(pageData.hasSensitiveActionSurface),
+    sensitiveActionKinds: toArray(pageData.sensitiveActionKinds).slice(0, 10),
     apkLinks,
     buttonTexts: toArray(pageData.buttonTexts),
     anchorHrefs: toArray(pageData.anchorHrefs),
@@ -589,6 +1193,12 @@ function normalizeSignals(data, trustedDomains) {
     foundAdultKeywords,
     foundBankingKeywords,
     foundInvestmentKeywords,
+    foundPaymentWalletKeywords,
+    foundGovernmentKeywords,
+    foundTelecomUtilityKeywords,
+    foundDeliveryKeywords,
+    foundPlatformAccountKeywords,
+    foundJobCharityFeeKeywords,
     foundTechSupportKeywords,
     foundPopupAbuseKeywords,
     foundFakeShoppingKeywords,
@@ -596,6 +1206,7 @@ function normalizeSignals(data, trustedDomains) {
     foundPiratedKeywords,
     domainCategorySignals,
     dataLeakSignals,
+    securitySignals,
     networkSignals: normalizeNetworkSignals(pageData.networkSignals),
     contentRiskSignals,
     hasAdHeavySignal: Boolean(pageData.hasAdHeavySignal),
@@ -648,7 +1259,67 @@ function normalizeDataLeakSignals(value) {
     localFormWithJsSinkIndicator: Boolean(raw.localFormWithJsSinkIndicator),
     credentialLikeTextFieldCount: Number(raw.credentialLikeTextFieldCount) || 0,
     sensitiveTextareaCount: Number(raw.sensitiveTextareaCount) || 0,
-    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent)
+    deceptiveLowFrictionContent: Boolean(raw.deceptiveLowFrictionContent),
+    formValueReadIndicator: Boolean(raw.formValueReadIndicator),
+    formDataReadIndicator: Boolean(raw.formDataReadIndicator),
+    sensitiveStorageWriteIndicator: Boolean(raw.sensitiveStorageWriteIndicator),
+    cookieReadIndicator: Boolean(raw.cookieReadIndicator),
+    encodedPayloadIndicator: Boolean(raw.encodedPayloadIndicator),
+    webSocketSendIndicator: Boolean(raw.webSocketSendIndicator),
+    wildcardPostMessageIndicator: Boolean(raw.wildcardPostMessageIndicator)
+  };
+}
+
+function normalizeSecuritySignals(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    responseHeadersObserved: Boolean(raw.responseHeadersObserved),
+    hasContentSecurityPolicy: Boolean(raw.hasContentSecurityPolicy),
+    hasStrictTransportSecurity: Boolean(raw.hasStrictTransportSecurity),
+    hasXContentTypeOptions: Boolean(raw.hasXContentTypeOptions),
+    hasReferrerPolicy: Boolean(raw.hasReferrerPolicy),
+    hasPermissionsPolicy: Boolean(raw.hasPermissionsPolicy),
+    missingSecurityHeaderCount: Number(raw.missingSecurityHeaderCount) || 0,
+    mixedContentRequestCount: Number(raw.mixedContentRequestCount) || 0,
+    insecureActiveContentRequestCount: Number(raw.insecureActiveContentRequestCount) || 0,
+    thirdPartyScriptWithoutIntegrityCount: Number(raw.thirdPartyScriptWithoutIntegrityCount) || 0,
+    unsandboxedThirdPartyIframeCount: Number(raw.unsandboxedThirdPartyIframeCount) || 0
+  };
+}
+
+function normalizeUrlLexicalSignals(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    urlLength: Number(raw.urlLength) || 0,
+    domainLength: Number(raw.domainLength) || 0,
+    isDomainIP: Boolean(raw.isDomainIP),
+    subdomainCount: Number(raw.subdomainCount) || 0,
+    excessiveSubdomainCount: Number(raw.excessiveSubdomainCount) || 0,
+    hasObfuscation: Boolean(raw.hasObfuscation),
+    obfuscatedCharCount: Number(raw.obfuscatedCharCount) || 0,
+    domainDigitRatio: Math.max(0, Math.min(1, Number(raw.domainDigitRatio) || 0)),
+    hyphenCount: Number(raw.hyphenCount) || 0,
+    credentialPathWordCount: Number(raw.credentialPathWordCount) || 0,
+    hasAtSymbol: Boolean(raw.hasAtSymbol),
+    lexicalRiskCount: Number(raw.lexicalRiskCount) || 0
+  };
+}
+
+function mergeSecuritySignals(staticSignals, observedSignals) {
+  const page = normalizeSecuritySignals(staticSignals);
+  const observed = normalizeSecuritySignals(observedSignals);
+  return {
+    responseHeadersObserved: observed.responseHeadersObserved || page.responseHeadersObserved,
+    hasContentSecurityPolicy: observed.hasContentSecurityPolicy || page.hasContentSecurityPolicy,
+    hasStrictTransportSecurity: observed.hasStrictTransportSecurity || page.hasStrictTransportSecurity,
+    hasXContentTypeOptions: observed.hasXContentTypeOptions || page.hasXContentTypeOptions,
+    hasReferrerPolicy: observed.hasReferrerPolicy || page.hasReferrerPolicy,
+    hasPermissionsPolicy: observed.hasPermissionsPolicy || page.hasPermissionsPolicy,
+    missingSecurityHeaderCount: observed.responseHeadersObserved ? observed.missingSecurityHeaderCount : page.missingSecurityHeaderCount,
+    mixedContentRequestCount: Math.max(page.mixedContentRequestCount, observed.mixedContentRequestCount),
+    insecureActiveContentRequestCount: Math.max(page.insecureActiveContentRequestCount, observed.insecureActiveContentRequestCount),
+    thirdPartyScriptWithoutIntegrityCount: page.thirdPartyScriptWithoutIntegrityCount,
+    unsandboxedThirdPartyIframeCount: page.unsandboxedThirdPartyIframeCount
   };
 }
 
@@ -674,6 +1345,8 @@ function normalizeNetworkSignals(value) {
     crossDomainSensitiveWriteRequests: Number(raw.crossDomainSensitiveWriteRequests) || 0,
     beaconOrPingAfterSensitiveInput: Number(raw.beaconOrPingAfterSensitiveInput) || 0,
     queryBearingGetAfterSensitiveForm: Number(raw.queryBearingGetAfterSensitiveForm) || 0,
+    sensitiveInteractionObserved: Boolean(raw.sensitiveInteractionObserved),
+    lastSensitiveKind: String(raw.lastSensitiveKind || "").slice(0, 40),
     suspiciousRequestDomains: toArray(raw.suspiciousRequestDomains).slice(0, 30),
     temporalSignals: normalizeTemporalSignals(raw.temporalSignals)
   };
@@ -694,310 +1367,25 @@ function normalizeTemporalSignals(value) {
 }
 
 function calculateRuleRisk(signals, categoryConfig, detectionPolicy) {
-  if (typeof ArgusEngine !== "undefined" && ArgusEngine.evaluate) {
-    return ArgusEngine.evaluate(signals, categoryConfig, detectionPolicy);
-  }
-
-  console.warn("[Project Argus] modular engine unavailable; using legacy local detector.");
-  return calculateLegacyRuleRisk(signals, categoryConfig);
-}
-
-function calculateLegacyRuleRisk(signals, categoryConfig) {
-  const reasons = [];
-  const categoryScores = {};
-  const configuredCategoryIds = new Set((categoryConfig.categories || []).map((category) => category.id));
-  const dataLeak = signals.dataLeakSignals;
-  const network = signals.networkSignals;
-
-  const strongDanger = hasStrongDangerSignals(signals);
-
-  if (signals.isSearchEnginePage && !strongDanger) {
-    return buildRisk(0, "SAFE", "SAFE", ["Official search engine result page without concrete danger signals."], "LOCAL_MODEL");
-  }
-
-  if (isOfficialAppStore(signals.domain) && signals.apkLinks.length === 0 && !signals.hasPasswordField && !signals.hasOTP) {
-    return buildRisk(0, "SAFE", "SAFE", ["Official app store domain without direct APK or credential collection."], "LOCAL_MODEL");
-  }
-
-  if (!signals.isTrustedDomain) {
-    if (signals.domain.length > 35) {
-      addScore(categoryScores, "BRAND_IMPERSONATION", 10);
-      reasons.push("Domain is unusually long.");
-    }
-
-    if ((signals.domain.match(/-/g) || []).length >= 2) {
-      addScore(categoryScores, "BRAND_IMPERSONATION", 15);
-      reasons.push("Domain contains multiple hyphens.");
-    }
-
-    if (signals.suspiciousDomainSignals.length > 0) {
-      addScore(categoryScores, "BRAND_IMPERSONATION", 15);
-      reasons.push(...signals.suspiciousDomainSignals.slice(0, 4));
-    }
-
-    if (hasBrandImpersonationPattern(signals.domain)) {
-      addScore(categoryScores, "BRAND_IMPERSONATION", 25);
-      reasons.push("Domain resembles a known brand impersonation pattern.");
-    }
-  }
-
-  if (!signals.isTrustedDomain && signals.hasPasswordField) {
-    addScore(categoryScores, "PHISHING_LOGIN", 25);
-    reasons.push("Password field found on an untrusted domain.");
-  }
-
-  if (!signals.isTrustedDomain && signals.hasOTP) {
-    addScore(categoryScores, "PHISHING_LOGIN", 25);
-    reasons.push("OTP or verification-code signal found on an untrusted domain.");
-  }
-
-  if (!signals.isTrustedDomain && signals.hasLoginKeyword) {
-    addScore(categoryScores, "PHISHING_LOGIN", 15);
-    reasons.push("Login or account-verification language found on an untrusted domain.");
-  }
-
-  if (!signals.isTrustedDomain && signals.foundStoreKeywords.length > 0) {
-    addScore(categoryScores, "FAKE_APP_STORE", 25);
-    reasons.push(`App-store keywords on untrusted domain: ${signals.foundStoreKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (signals.apkLinks.length > 0) {
-    addScore(categoryScores, "MALICIOUS_APK", 35);
-    reasons.push(`Actual .apk href detected (${signals.apkLinks.length}).`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundStoreKeywords.length > 0 && signals.apkLinks.length > 0) {
-    addScore(categoryScores, "FAKE_APP_STORE", 25);
-    reasons.push("App-store keywords appear together with an actual APK link.");
-  }
-
-  if (!signals.isTrustedDomain && signals.foundBankingKeywords.length > 0 && signals.hasPasswordField) {
-    addScore(categoryScores, "FAKE_BANKING", 30);
-    reasons.push("Banking keywords appear with a password field on an untrusted domain.");
-  }
-
-  if (!signals.isTrustedDomain && signals.foundBankingKeywords.length > 0 && signals.hasOTP) {
-    addScore(categoryScores, "FAKE_BANKING", 30);
-    reasons.push("Banking keywords appear with OTP signals on an untrusted domain.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.crossDomainFormActionCount > 0) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 25);
-    reasons.push("This form may send sensitive information to a different domain.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.passwordCrossDomainForm) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 50);
-    reasons.push("Password field is inside a form that submits to a different domain.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.otpOrPaymentCrossDomainForm) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 60);
-    reasons.push("OTP, payment, or bank-like fields may submit to a different domain.");
-  }
-
-  if (dataLeak.httpFormActionCount > 0) {
-    addScore(categoryScores, "INSECURE_FORM_SUBMISSION", 60);
-    reasons.push("Sensitive information may be submitted over an insecure HTTP connection.");
-  }
-
-  if ((dataLeak.passwordHttpForm || dataLeak.otpOrPaymentHttpForm) && (signals.hasPasswordField || signals.hasOTP)) {
-    addScore(categoryScores, "INSECURE_FORM_SUBMISSION", 80);
-    reasons.push("Password or OTP form action uses insecure HTTP.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.hiddenIframeCount > 0 && signals.hasPasswordField) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 45);
-    reasons.push("Hidden iframe appears on a page that also contains a password form.");
-  }
-
-  if (!signals.isTrustedDomain && network.thirdPartyXHRRequests >= 3 && network.requestsAfterFormSubmit >= 3) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 40);
-    reasons.push("This page contacted multiple third-party endpoints after a form interaction.");
-  }
-
-  if (!signals.isTrustedDomain && network.requestsAfterPasswordFocus >= 3) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 35);
-    reasons.push("Multiple third-party requests occurred after a password field interaction.");
-  }
-
-  if (dataLeak.thirdPartyApkLinks.length > 0) {
-    addScore(categoryScores, "MALICIOUS_APK", 35);
-    reasons.push("APK download is served from an unrelated or insecure domain.");
-  }
-
-  if (dataLeak.httpApkLinks.length > 0) {
-    addScore(categoryScores, "MALICIOUS_APK", 50);
-    reasons.push("APK download is served over insecure HTTP.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.externalScriptCount > 0 && (signals.hasPasswordField || signals.hasOTP)) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 25);
-    reasons.push("External scripts appear on a page that collects password or OTP metadata.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.credentialLikeTextFieldCount > 0) {
-    addScore(categoryScores, "PHISHING_LOGIN", 30);
-    reasons.push(`Credential-like text fields detected without normal password input (${dataLeak.credentialLikeTextFieldCount}).`);
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 45);
-    reasons.push("Local-looking form is handled by JavaScript network logic while collecting credential-like fields.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.scriptNetworkSinkCount > 0 && dataLeak.externalUrlHints.length > 0) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 35);
-    reasons.push("Inline script contains network-send behavior and external endpoint hints.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.dynamicEndpointAssemblyCount > 0 && dataLeak.scriptNetworkSinkCount > 0) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 30);
-    reasons.push("JavaScript appears to assemble a network endpoint dynamically before sending metadata.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.delayedRelayIndicator && dataLeak.localFormWithJsSinkIndicator) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 35);
-    reasons.push("Form handling includes delayed JavaScript relay behavior.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 45);
-    reasons.push("Popup consent flow can pass messages back into network-send logic.");
-  }
-
-  if (!signals.isTrustedDomain && (dataLeak.clipboardReadIndicator || dataLeak.fileMetadataHarvestIndicator)) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 35);
-    reasons.push("Page script can inspect clipboard or uploaded-file metadata.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.sensitiveTextareaCount > 0 && (dataLeak.clipboardReadIndicator || dataLeak.scriptNetworkSinkCount > 0)) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 40);
-    reasons.push("Sensitive recovery-style text area appears with script-based data movement behavior.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.guardedNetworkToggleIndicator && dataLeak.scriptNetworkSinkCount > 0) {
-    addScore(categoryScores, "DATA_EXFILTRATION", 20);
-    reasons.push("Script contains guarded network-send behavior that may hide during basic scans.");
-  }
-
-  if (!signals.isTrustedDomain && dataLeak.redirectAwayLinkCount >= 10 && dataLeak.thirdPartyIframeCount > 0) {
-    addScore(categoryScores, "REDIRECT_SCAM", 30);
-    reasons.push("Suspicious redirect pattern to unrelated domains detected.");
-  }
-
-  if (!signals.isTrustedDomain && signals.foundGamblingKeywords.length > 0) {
-    addScore(categoryScores, "GAMBLING", 25);
-    reasons.push(`Gambling keywords detected: ${signals.foundGamblingKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.domainCategorySignals.gambling.length > 0) {
-    addScore(categoryScores, "GAMBLING", 25);
-    reasons.push(`Gambling-style domain pattern detected: ${signals.domainCategorySignals.gambling.slice(0, 3).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundAdultKeywords.length > 0) {
-    addScore(categoryScores, "ADULT_CONTENT", 20);
-    reasons.push(`Adult content keywords detected: ${signals.foundAdultKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.domainCategorySignals.adult.length > 0) {
-    addScore(categoryScores, "ADULT_CONTENT", 20);
-    reasons.push(`Adult-content domain pattern detected: ${signals.domainCategorySignals.adult.slice(0, 3).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundInvestmentKeywords.length > 0) {
-    addScore(categoryScores, "INVESTMENT_SCAM", 30);
-    reasons.push(`Investment or crypto scam keywords detected: ${signals.foundInvestmentKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundTechSupportKeywords.length > 0) {
-    addScore(categoryScores, "TECH_SUPPORT_SCAM", 30);
-    reasons.push(`Tech support scam keywords detected: ${signals.foundTechSupportKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundFakeShoppingKeywords.length > 0) {
-    addScore(categoryScores, "FAKE_SHOPPING", 20);
-    reasons.push(`Fake shopping keywords detected: ${signals.foundFakeShoppingKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundPrizeKeywords.length > 0) {
-    addScore(categoryScores, "PRIZE_SCAM", 20);
-    reasons.push(`Prize or giveaway scam keywords detected: ${signals.foundPrizeKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && signals.foundPiratedKeywords.length > 0) {
-    addScore(categoryScores, "PIRATED_SOFTWARE", 30);
-    reasons.push(`Pirated software keywords detected: ${signals.foundPiratedKeywords.slice(0, 5).join(", ")}.`);
-  }
-
-  if (!signals.isTrustedDomain && (signals.hasAdHeavySignal || signals.foundPopupAbuseKeywords.length > 0)) {
-    addScore(categoryScores, "MALVERTISING", signals.hasAdHeavySignal ? 35 : 25);
-    reasons.push(...signals.adHeavySignals.slice(0, 4));
-    if (signals.foundPopupAbuseKeywords.length > 0) {
-      reasons.push(`Popup abuse keywords detected: ${signals.foundPopupAbuseKeywords.slice(0, 5).join(", ")}.`);
-    }
-  }
-
-  let finalScore = Math.min(100, sumScores(categoryScores));
-  let category = overrideDominantCategory(signals, dominantCategory(categoryScores));
-
-  if (isContentRiskCategory(category) && !hasContentRiskEscalator(signals)) {
-    finalScore = Math.max(CONTENT_RISK_MIN_SCORE, Math.min(finalScore, 55));
-    category = "CONTENT_RISK";
-    reasons.push("Content-risk page capped below HIGH_RISK because no credential, APK, OTP, or aggressive scam behavior was found.");
-  }
-
-  if (!configuredCategoryIds.has(category) && category !== "SAFE") {
-    reasons.push(`Category ${category} is rule-defined and not present in risky_categories.json.`);
-  }
-
-  if (signals.isTrustedDomain && !strongDanger) {
-    finalScore = Math.min(finalScore, 20);
-    category = "SAFE";
-    reasons.push("Trusted official domain capped at low risk because no strong danger signal was found.");
-  }
-
-  if (isFinanceOrNewsSafeContext(signals) && !strongDanger) {
-    finalScore = Math.min(finalScore, 20);
-    reasons.push("Finance/news context reduced because banking/account words alone are not enough.");
-  }
-
-  return buildRisk(finalScore, levelFromScore(finalScore), category || "SAFE", unique(reasons), "LOCAL_MODEL");
-}
-
-function buildRisk(score, level, category, reasons, source) {
-  const riskScore = Math.max(0, Math.min(100, Math.round(Number(score) || 0)));
-
-  return {
-    score: riskScore,
-    riskScore,
-    level: level || levelFromScore(riskScore),
-    category: category || "UNKNOWN",
-    reasons: reasons.length ? reasons : ["No high-risk indicators were detected."],
-    shouldWarn: false,
-    source: source || "LOCAL_MODEL"
-  };
-}
-
-function shouldShowWarning(risk, signals, settings) {
-  if (risk.score < settings.warningThreshold) {
-    return false;
-  }
-
-  if (risk.level === "HIGH_RISK") {
-    return true;
-  }
-
-  return risk.level === "SUSPICIOUS" && !signals.isTrustedDomain;
+  // The modular engine is the single scoring authority. Load failure is handled
+  // fail-closed in handlePageScan (engine-unavailable result), so this is only
+  // reached when the engine is present.
+  return ArgusEngine.evaluate(signals, categoryConfig, detectionPolicy);
 }
 
 async function saveScanResult(scanResult) {
   const current = await chrome.storage.local.get(["argusTabScans"]);
   const argusTabScans = current.argusTabScans || {};
 
-  if (scanResult.tabId) {
-    argusTabScans[String(scanResult.tabId)] = scanResult;
+  if (Number.isInteger(scanResult.tabId) && scanResult.tabId >= 0) {
+    const key = String(scanResult.tabId);
+    // Monotonic write: never let a late/lower-completeness scan (e.g. a slow
+    // PRELIMINARY resolving after INTERACTION_FINAL) overwrite the better result
+    // for the same page. A new page load always replaces.
+    if (!ArgusScanFreshness.shouldReplaceStoredScan(argusTabScans[key], scanResult)) {
+      return;
+    }
+    argusTabScans[key] = scanResult;
   }
 
   await chrome.storage.local.set({
@@ -1010,32 +1398,93 @@ async function getLatestScan(tabId) {
   const stored = await chrome.storage.local.get(["lastArgusScan", "argusTabScans"]);
   const tabScans = stored.argusTabScans || {};
 
-  if (tabId && tabScans[String(tabId)]) {
-    return tabScans[String(tabId)];
+  if (Number.isInteger(tabId) && tabId >= 0) {
+    return tabScans[String(tabId)] || null;
   }
 
   return stored.lastArgusScan || null;
 }
 
 async function clearLastScan(tabId) {
-  const stored = await chrome.storage.local.get(["argusTabScans"]);
+  const stored = await chrome.storage.local.get(["lastArgusScan", "argusTabScans"]);
   const tabScans = stored.argusTabScans || {};
 
-  if (tabId && tabScans[String(tabId)]) {
+  if (Number.isInteger(tabId) && tabId >= 0 && tabScans[String(tabId)]) {
     delete tabScans[String(tabId)];
   }
 
   await chrome.storage.local.set({ argusTabScans: tabScans });
-  await chrome.storage.local.remove(["lastArgusScan"]);
+  if (!Number.isInteger(tabId) || tabId < 0 || stored.lastArgusScan && stored.lastArgusScan.tabId === tabId) {
+    await chrome.storage.local.remove(["lastArgusScan"]);
+  }
 }
 
 async function saveFalsePositiveReport(payload) {
+  const settings = await loadSettings();
+  const report = sanitizeFalsePositiveReport(payload);
+  report.delivery = { status: "LOCAL_ONLY", attempts: 0, lastAttemptAt: null };
+
+  // Durability first: persist locally BEFORE any network attempt, so a delivery
+  // that is blocked (Private Network Access), offline, or interrupted by a
+  // service-worker shutdown can never lose the report (F17).
+  await persistFalsePositiveReport(report);
+
+  const endpoint = settings.feedbackEndpoint;
+  // Deliver only to the local loopback collector (F16 pins the endpoint; re-check
+  // here as defense in depth so a report is never posted off-device).
+  if (settings.sendFalsePositiveFeedback && isLoopbackHost(hostnameOf(endpoint))) {
+    report.delivery = { status: "QUEUED", attempts: 1, lastAttemptAt: new Date().toISOString() };
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(report)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      report.delivery.status = "SENT";
+    } catch (error) {
+      report.delivery.status = "QUEUED";
+      report.delivery.error = describeDeliveryError(error);
+    }
+    await updateFalsePositiveDelivery(report.reportId, report.delivery);
+  }
+  return { reportId: report.reportId, delivery: report.delivery };
+}
+
+async function persistFalsePositiveReport(report) {
   const stored = await chrome.storage.local.get(["falsePositiveReports"]);
   const reports = stored.falsePositiveReports || [];
-  reports.push(sanitizeFalsePositiveReport(payload));
-  await chrome.storage.local.set({
-    falsePositiveReports: reports.slice(-100)
-  });
+  reports.push(report);
+  await chrome.storage.local.set({ falsePositiveReports: reports.slice(-5000) });
+}
+
+async function updateFalsePositiveDelivery(reportId, delivery) {
+  const stored = await chrome.storage.local.get(["falsePositiveReports"]);
+  const reports = stored.falsePositiveReports || [];
+  const target = reports.find((item) => item && item.reportId === reportId);
+  if (target) {
+    target.delivery = delivery;
+    await chrome.storage.local.set({ falsePositiveReports: reports });
+  }
+}
+
+function hostnameOf(endpoint) {
+  try {
+    return new URL(String(endpoint)).hostname;
+  } catch (error) {
+    return "";
+  }
+}
+
+function describeDeliveryError(error) {
+  const message = String(error && error.message || error).slice(0, 160);
+  // Chrome blocks requests from a public page context to a loopback address under
+  // Private Network Access; treat that and generic network failures as a plain
+  // reachability note (the report is already stored locally) rather than an error.
+  if (/NETWORK_ACCESS_DENIED|Failed to fetch|private network|network error|load failed/i.test(message)) {
+    return "LOCAL_COLLECTOR_UNREACHABLE (offline or blocked by Private Network Access); report stored locally.";
+  }
+  return message;
 }
 
 function sanitizeFalsePositiveReport(payload) {
@@ -1043,12 +1492,80 @@ function sanitizeFalsePositiveReport(payload) {
   const risk = raw.risk && typeof raw.risk === "object" ? raw.risk : raw;
 
   return {
+    reportId: crypto.randomUUID(),
+    reportSchemaVersion: REPORT_SCHEMA_VERSION,
+    userLabel: "FALSE_POSITIVE_UNREVIEWED",
     domain: String(raw.domain || "").slice(0, 180),
     score: Math.max(0, Math.min(100, Math.round(Number(risk.score ?? risk.riskScore) || 0))),
     level: String(risk.level || "UNKNOWN").slice(0, 40),
     category: String(risk.category || "UNKNOWN").slice(0, 80),
     reasons: toArray(risk.reasons).slice(0, 8).map((reason) => String(reason).slice(0, 240)),
-    timestamp: String(raw.timestamp || new Date().toISOString())
+    timestamp: String(raw.timestamp || new Date().toISOString()),
+    decisionTier: String(risk.decisionTier || "UNKNOWN").slice(0, 60),
+    policyVersion: String(risk.policyVersion || "unknown").slice(0, 40),
+    detectionPolicyVersion: String(risk.detectionPolicyVersion || raw.detectionPolicyVersion || "unknown").slice(0, 40),
+    source: String(risk.source || raw.source || "LOCAL_MODEL").slice(0, 60),
+    scoreBeforePolicy: Math.max(0, Math.min(100, Math.round(Number(risk.legacyScore) || 0))),
+    scoreAfterPolicy: Math.max(0, Math.min(100, Math.round(Number(risk.score) || 0))),
+    finalStatus: String(risk.status || risk.level || "UNKNOWN").slice(0, 40),
+    riskContext: String(risk.riskContext || "UNKNOWN").slice(0, 60),
+    warningStage: String(risk.warningStage || "NONE").slice(0, 30),
+    sensitivityMode: String(risk.sensitivityMode || "BALANCED").slice(0, 30),
+    claimedBrandIds: toArray(risk.claimedBrands).slice(0, 5).map((brand) => String(brand && brand.brandId || "").slice(0, 80)).filter(Boolean),
+    identityEvidence: risk.identityEvidence && typeof risk.identityEvidence === "object" ? {
+      domainMismatch: Boolean(risk.identityEvidence.domainMismatch),
+      visualMatch: Boolean(risk.identityEvidence.visualMatch),
+      deceptiveSubdomain: Boolean(risk.identityEvidence.deceptiveSubdomain),
+      homographOrTyposquat: Boolean(risk.identityEvidence.homographOrTyposquat)
+    } : {},
+    evidenceIds: toArray(risk.evidenceIds).slice(0, 30).map((id) => String(id).slice(0, 80)),
+    evidenceGroups: toArray(risk.evidenceGroups).slice(0, 15).map((id) => String(id).slice(0, 80)),
+    modelScore: Math.max(0, Math.min(100, Math.round(Number(risk.model && risk.model.score || risk.modelAnalysis && risk.modelAnalysis.score) || 0))),
+    modelOnly: Boolean(risk.modelOnly),
+    warningAllowed: Boolean(risk.warningAllowed),
+    overlayAllowed: Boolean(risk.overlayAllowed),
+    scanPhase: String(raw.scanPhase || "UNKNOWN").slice(0, 40),
+    navigationId: String(raw.navigationId || "unknown").slice(0, 100),
+    frameId: Number(raw.frameId) || 0,
+    featureVector: typeof ArgusFeatureExtractor !== "undefined" ? ArgusFeatureExtractor.extract(raw) : {},
+    destinationRoles: Object.keys(raw.networkSignals && raw.networkSignals.destinationRoleCounts || {}).slice(0, 30),
+    reputation: raw.reputation && typeof raw.reputation === "object" ? {
+      verdict: String(raw.reputation.verdict || "UNAVAILABLE").slice(0, 40),
+      confidence: String(raw.reputation.confidence || "LOW").slice(0, 20),
+      sources: toArray(raw.reputation.sources).slice(0, 8).map((item) => String(item).slice(0, 80)),
+      categories: toArray(raw.reputation.categories).slice(0, 8).map((item) => String(item).slice(0, 80))
+    } : { verdict: "UNAVAILABLE", confidence: "LOW", sources: [], categories: [] },
+    interactionTimeline: sanitizeFeedbackTimeline(raw.interactionTimeline),
+    shadowComparison: sanitizeFeedbackShadow(raw.shadowComparison),
+    popularDomainContext: raw.popularDomainContext && raw.popularDomainContext.matched ? {
+      matched: true,
+      rank: Number(raw.popularDomainContext.rank) || null,
+      tier: String(raw.popularDomainContext.tier || "POPULAR").slice(0, 40),
+      roleHint: String(raw.popularDomainContext.roleHint || "UNKNOWN").slice(0, 60)
+    } : { matched: false },
+    reviewRequired: true,
+    poisoningRiskNote: "User labels must be reviewed before retraining.",
+    privacy: "No form values, cookies, request bodies, query strings, authorization headers, clipboard contents, file contents, passwords, or OTPs collected."
+  };
+}
+
+function sanitizeFeedbackTimeline(value) {
+  return toArray(value).slice(-40).map((item) => ({
+    navigationId: String(item.navigationId || "").slice(0, 100), frameId: Number(item.frameId) || 0,
+    timestamp: String(item.timestamp || "").slice(0, 40), eventType: String(item.eventType || "").slice(0, 60),
+    scanPhase: String(item.scanPhase || "").slice(0, 40), destinationRole: String(item.destinationRole || "NONE").slice(0, 60),
+    method: String(item.method || "NONE").slice(0, 12), protocol: String(item.protocol || "NONE").slice(0, 12),
+    sensitiveContextPresent: Boolean(item.sensitiveContextPresent), evidenceIds: toArray(item.evidenceIds).slice(0, 8).map(String)
+  }));
+}
+
+function sanitizeFeedbackShadow(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    legacyStatus: String(value.legacyStatus || "").slice(0, 40), legacyScore: Number(value.legacyScore) || 0,
+    evidenceFirstStatus: String(value.evidenceFirstStatus || "").slice(0, 40), evidenceFirstScore: Number(value.evidenceFirstScore) || 0,
+    modelScore: Number(value.modelScore) || 0, modelOnly: Boolean(value.modelOnly), overlayAllowed: Boolean(value.overlayAllowed),
+    modelVersion: String(value.modelVersion || "").slice(0, 40), policyVersion: String(value.policyVersion || "").slice(0, 40)
   };
 }
 
@@ -1069,158 +1586,6 @@ function addLimited(list, value, limit) {
   if (list.length > limit) {
     list.shift();
   }
-}
-
-function addScore(categoryScores, category, amount) {
-  categoryScores[category] = (categoryScores[category] || 0) + amount;
-}
-
-function sumScores(categoryScores) {
-  return Object.values(categoryScores).reduce((total, value) => total + value, 0);
-}
-
-function dominantCategory(categoryScores) {
-  return Object.entries(categoryScores).sort((a, b) => b[1] - a[1])[0]?.[0] || "SAFE";
-}
-
-function overrideDominantCategory(signals, currentCategory) {
-  const dataLeak = signals.dataLeakSignals || normalizeDataLeakSignals({});
-  const network = signals.networkSignals || normalizeNetworkSignals({});
-
-  if (dataLeak.passwordHttpForm || dataLeak.otpOrPaymentHttpForm || dataLeak.httpFormActionCount > 0) {
-    return "INSECURE_FORM_SUBMISSION";
-  }
-
-  if (
-    dataLeak.passwordCrossDomainForm ||
-    dataLeak.otpOrPaymentCrossDomainForm ||
-    dataLeak.crossDomainFormActionCount > 0 ||
-    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
-    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
-    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
-    dataLeak.clipboardReadIndicator ||
-    dataLeak.fileMetadataHarvestIndicator ||
-    network.requestsAfterFormSubmit >= 3 ||
-    network.requestsAfterPasswordFocus >= 3
-  ) {
-    return "DATA_EXFILTRATION";
-  }
-
-  if (signals.foundBankingKeywords.length > 0 && (signals.hasPasswordField || signals.hasOTP)) {
-    return "FAKE_BANKING";
-  }
-
-  if (signals.foundStoreKeywords.length > 0 && signals.apkLinks.length > 0) {
-    return "FAKE_APP_STORE";
-  }
-
-  if (signals.apkLinks.length > 0) {
-    return "MALICIOUS_APK";
-  }
-
-  if (signals.foundGamblingKeywords.length > 0 || signals.domainCategorySignals.gambling.length > 0) {
-    return "GAMBLING";
-  }
-
-  if (signals.foundAdultKeywords.length > 0 || signals.domainCategorySignals.adult.length > 0) {
-    return "ADULT_CONTENT";
-  }
-
-  return currentCategory || "SAFE";
-}
-
-function levelFromScore(score) {
-  if (score >= 70) {
-    return "HIGH_RISK";
-  }
-  if (score >= 35) {
-    return "SUSPICIOUS";
-  }
-  return "SAFE";
-}
-
-function isContentRiskCategory(category) {
-  return category === "CONTENT_RISK" || category === "GAMBLING" || category === "ADULT_CONTENT";
-}
-
-function hasContentRiskEscalator(signals) {
-  const dataLeak = signals.dataLeakSignals || normalizeDataLeakSignals({});
-  const network = signals.networkSignals || normalizeNetworkSignals({});
-  return (
-    signals.apkLinks.length > 0 ||
-    signals.hasPasswordField ||
-    signals.hasOTP ||
-    signals.foundPopupAbuseKeywords.length > 0 ||
-    dataLeak.crossDomainFormActionCount > 0 ||
-    dataLeak.httpFormActionCount > 0 ||
-    dataLeak.hiddenIframeCount > 0 ||
-    dataLeak.thirdPartyApkLinks.length > 0 ||
-    dataLeak.httpApkLinks.length > 0 ||
-    network.requestsAfterFormSubmit >= 3 ||
-    network.requestsAfterPasswordFocus >= 3
-  );
-}
-
-function hasStrongDangerSignals(signals) {
-  const dataLeak = signals.dataLeakSignals || normalizeDataLeakSignals({});
-  const network = signals.networkSignals || normalizeNetworkSignals({});
-  return (
-    signals.apkLinks.length > 0 ||
-    signals.hasPasswordField ||
-    signals.hasOTP ||
-    (signals.foundStoreKeywords.length > 0 && signals.apkLinks.length > 0) ||
-    (signals.foundBankingKeywords.length > 0 && (signals.hasPasswordField || signals.hasOTP)) ||
-    (signals.hasAdHeavySignal && (signals.foundPopupAbuseKeywords.length > 0 || signals.foundGamblingKeywords.length > 0)) ||
-    dataLeak.passwordCrossDomainForm ||
-    dataLeak.otpOrPaymentCrossDomainForm ||
-    dataLeak.passwordHttpForm ||
-    dataLeak.otpOrPaymentHttpForm ||
-    dataLeak.httpApkLinks.length > 0 ||
-    dataLeak.thirdPartyApkLinks.length > 0 ||
-    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
-    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
-    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
-    dataLeak.clipboardReadIndicator ||
-    dataLeak.fileMetadataHarvestIndicator ||
-    network.requestsAfterFormSubmit >= 3 ||
-    network.requestsAfterPasswordFocus >= 3
-  );
-}
-
-function hasObviousHighRiskEvidence(signals) {
-  const dataLeak = signals.dataLeakSignals || normalizeDataLeakSignals({});
-  return (
-    (signals.apkLinks.length > 0 && signals.foundStoreKeywords.length > 0) ||
-    (signals.hasPasswordField && signals.hasOTP) ||
-    (signals.foundBankingKeywords.length > 0 && signals.hasPasswordField && signals.hasOTP) ||
-    dataLeak.passwordCrossDomainForm ||
-    dataLeak.otpOrPaymentCrossDomainForm ||
-    dataLeak.passwordHttpForm ||
-    dataLeak.otpOrPaymentHttpForm ||
-    dataLeak.httpApkLinks.length > 0 ||
-    (dataLeak.credentialLikeTextFieldCount > 0 && dataLeak.localFormWithJsSinkIndicator) ||
-    (dataLeak.scriptNetworkSinkCount > 0 && dataLeak.dynamicEndpointAssemblyCount > 0) ||
-    (dataLeak.popupMessageTrapIndicator && dataLeak.scriptNetworkSinkCount > 0) ||
-    (dataLeak.sensitiveTextareaCount > 0 && (dataLeak.clipboardReadIndicator || dataLeak.scriptNetworkSinkCount > 0))
-  );
-}
-
-function isFinanceOrNewsSafeContext(signals) {
-  return signals.isTrustedDomain && (
-    signals.domain.includes("finance.yahoo.com") ||
-    signals.domain.endsWith("set.or.th") ||
-    signals.domain.endsWith("sec.or.th") ||
-    signals.domain.endsWith("bot.or.th")
-  );
-}
-
-function isOfficialAppStore(domain) {
-  return [
-    "play.google.com",
-    "apps.apple.com",
-    "galaxystore.samsung.com",
-    "apps.samsung.com"
-  ].some((official) => isDomainMatch(domain, official));
 }
 
 function isDomainMatch(domain, expectedDomain) {
@@ -1275,7 +1640,7 @@ function isSuspiciousRequestType(type) {
 }
 
 function isSearchEnginePage(url, domain, pathname) {
-  const searchDomains = ["google.com", "www.google.com", "google.co.th", "www.google.co.th", "bing.com", "www.bing.com", "search.brave.com", "duckduckgo.com", "www.duckduckgo.com"];
+  const searchDomains = SHARED_LISTS.SEARCH_ENGINE_DOMAINS || [];
 
   if (!searchDomains.some((candidate) => isDomainMatch(domain, candidate)) && !isGoogleDomain(domain)) {
     return false;
@@ -1289,8 +1654,7 @@ function isSearchEnginePage(url, domain, pathname) {
 }
 
 function getSuspiciousDomainSignals(domain) {
-  const suspiciousWords = ["verify", "secure", "update", "login", "account", "wallet", "bank"];
-  return suspiciousWords
+  return (SHARED_LISTS.SUSPICIOUS_DOMAIN_WORDS || [])
     .filter((word) => domain.includes(word))
     .map((word) => `Domain contains suspicious word: ${word}.`);
 }
@@ -1304,8 +1668,4 @@ function getDomainCategorySignals(domain) {
 
 function isGoogleDomain(domain) {
   return /^(.+\.)?google\.[a-z.]+$/i.test(domain);
-}
-
-function hasBrandImpersonationPattern(domain) {
-  return /(g00gle|faceb00k|paypa[l1i]|micros0ft|samsunng|app1e)/i.test(domain);
 }

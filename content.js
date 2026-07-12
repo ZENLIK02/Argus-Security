@@ -1,66 +1,31 @@
 (function () {
   const SCAN_MESSAGE = "ARGUS_PAGE_SCAN";
-  const WARNING_MESSAGE = "ARGUS_SHOW_WARNING";
   const RESCAN_MESSAGE = "ARGUS_RESCAN_PAGE";
   const PASSWORD_FOCUS_MESSAGE = "ARGUS_PASSWORD_FIELD_FOCUSED";
   const FORM_SUBMITTED_MESSAGE = "ARGUS_FORM_SUBMITTED";
   const DOWNLOAD_CLICKED_MESSAGE = "ARGUS_DOWNLOAD_CLICKED";
-  const OVERLAY_ID = "argus-warning-overlay";
+  const PAGE_CHANGED_MESSAGE = "ARGUS_PAGE_CHANGED";
   const BADGE_ID = "argus-scan-badge";
   const BADGE_PANEL_ID = "argus-scan-detail-panel";
-  let lastDemoWarningSignature = "";
-  const sentPageEvents = new Set();
+  let currentPageKey = getPageKey();
+  let pageChangeTimer = null;
+  let finalScanTimer = null;
+  let latestRenderedScan = null;
+  let currentNavigationId = null;
+  // Map of eventKey -> last-sent timestamp (throttle, not permanent suppression).
+  const sentPageEvents = new Map();
+  const PASSWORD_FOCUS_THROTTLE_MS = 3000;
 
-  const TRUSTED_DOMAINS = [
-    "google.com", "www.google.com", "google.co.th", "www.google.co.th", "play.google.com", "accounts.google.com",
-    "youtube.com", "roblox.com", "create.roblox.com", "finance.yahoo.com",
-    "yahoo.com", "samsung.com", "www.samsung.com", "galaxystore.samsung.com",
-    "apps.samsung.com", "apple.com", "apps.apple.com", "github.com",
-    "microsoft.com", "tiktok.com",
-    "instagram.com", "facebook.com", "x.com", "twitter.com", "linkedin.com",
-    "reddit.com", "discord.com", "steamcommunity.com", "steampowered.com",
-    "epicgames.com", "store.epicgames.com", "mit.edu", "ieee.org", "arxiv.org",
-    "kbank.co.th", "kasikornbank.com", "scb.co.th", "bangkokbank.com",
-    "krungsri.com", "set.or.th", "sec.or.th", "bot.or.th"
-  ];
-
-  const SEARCH_ENGINE_DOMAINS = [
-    "google.com",
-    "www.google.com",
-    "bing.com",
-    "www.bing.com",
-    "search.brave.com",
-    "duckduckgo.com",
-    "www.duckduckgo.com"
-  ];
-
-  const KEYWORDS = {
-    otp: ["otp", "one-time password", "one time password", "verification code", "verify code", "security code", "2fa", "mfa"],
-    login: ["login", "log in", "sign in", "verify account", "account verification", "account center", "member login", "เข้าสู่ระบบ", "สมัครสมาชิก", "ยืนยันบัญชี"],
-    appStore: ["google play", "play store", "galaxy store", "samsung store", "app store", "install app", "update app"],
-    gambling: ["casino", "gambling", "betting", "sportsbook", "slot", "slots", "poker", "baccarat", "jackpot", "ufa", "pgslot", "sbobet", "บาคาร่า", "คาสิโน", "สล็อต", "พนัน", "เว็บพนัน", "เดิมพัน", "แทงบอล", "หวย", "รูเล็ต", "ฝากถอน", "เครดิตฟรี", "โปรโมชั่น", "แจ็คพอต"],
-    adult: ["adult", "18+", "xxx", "porn", "sex", "onlyfans", "คลิปหลุด", "เว็บโป๊", "หนังโป๊"],
-    banking: ["bank", "mobile banking", "verify bank account", "account locked", "transfer", "wallet", "ธนาคาร", "บัญชีถูกล็อก", "โอนเงิน", "พร้อมเพย์"],
-    investment: ["guaranteed profit", "double your money", "crypto bonus", "fast return", "wallet connect", "ลงทุน", "กำไรแน่นอน", "ถอนเงินทันที", "คริปโต"],
-    techSupport: ["your device is infected", "call support", "virus detected", "security alert", "remote support", "pc cleaner"],
-    popupAbuse: ["allow notifications", "click allow", "continue to download", "your phone is infected", "download now", "skip ad", "fake download", "กดอนุญาต", "กดข้ามโฆษณา"],
-    fakeShopping: ["flash sale", "90% off", "limited offer", "official sale", "brand outlet", "clearance sale", "ของแท้ราคาถูก"],
-    prize: ["you won", "claim reward", "free iphone", "lucky winner", "giveaway", "รับรางวัล", "ของแจก"],
-    pirated: ["crack", "keygen", "serial key", "free premium", "patched", "mod apk"],
-    ad: ["ad", "ads", "advert", "advertisement", "banner", "sponsor", "sponsored", "promo", "promotion", "popup", "pop-up", "affiliate", "โฆษณา", "สมัครคลิก", "เครดิตฟรี", "ฝากถอน", "ชวนเพื่อน", "รับเงินคืน"]
-  };
-
-  const SUSPICIOUS_DOMAIN_WORDS = [
-    "verify", "secure", "update", "login", "account", "wallet", "bank",
-    "play-store", "google-play", "galaxy-store", "apk", "support-secure"
-  ];
-
-  const MULTI_LABEL_SUFFIXES = new Set([
-    "co.th", "or.th", "go.th", "ac.th", "in.th",
-    "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "org.au",
-    "co.jp", "co.kr", "com.sg", "com.my", "co.nz",
-    "github.io", "pages.dev", "vercel.app", "netlify.app", "appspot.com", "cloudfront.net"
-  ]);
+  // Domain/category lists come from the shared ArgusSharedLists module (loaded as
+  // the first content script — single source of truth with the worker, F8).
+  const SHARED = typeof ArgusSharedLists !== "undefined" ? ArgusSharedLists : {};
+  const TRUSTED_DOMAINS = SHARED.TRUSTED_DOMAINS || [];
+  const SEARCH_ENGINE_DOMAINS = SHARED.SEARCH_ENGINE_DOMAINS || [];
+  const KNOWN_IDENTITY_DOMAINS = SHARED.KNOWN_IDENTITY_DOMAINS || [];
+  const KNOWN_PAYMENT_DOMAINS = SHARED.KNOWN_PAYMENT_DOMAINS || [];
+  const KEYWORDS = SHARED.KEYWORDS || {};
+  const SUSPICIOUS_DOMAIN_WORDS = SHARED.SUSPICIOUS_DOMAIN_WORDS || [];
+  const MULTI_LABEL_SUFFIXES = new Set(SHARED.MULTI_LABEL_SUFFIXES || []);
 
   function normalizeText(value) {
     return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -135,6 +100,14 @@
     return TRUSTED_DOMAINS.some((trustedDomain) => isDomainMatch(domain, trustedDomain));
   }
 
+  function isKnownIdentityProvider(domain) {
+    return KNOWN_IDENTITY_DOMAINS.some((candidate) => isDomainMatch(String(domain || "").toLowerCase(), candidate));
+  }
+
+  function isKnownPaymentProvider(domain) {
+    return KNOWN_PAYMENT_DOMAINS.some((candidate) => isDomainMatch(String(domain || "").toLowerCase(), candidate));
+  }
+
   function isSearchEnginePage(url, domain, pathname) {
     const searchDomain = SEARCH_ENGINE_DOMAINS.some((candidate) => isDomainMatch(domain, candidate)) || isGoogleDomain(domain);
 
@@ -206,6 +179,25 @@
     return "";
   }
 
+  function getSensitiveActionKind(element) {
+    const surface = normalizeText([
+      getElementText(element),
+      element && element.getAttribute && element.getAttribute("href"),
+      element && element.getAttribute && element.getAttribute("action"),
+      element && element.getAttribute && element.getAttribute("aria-label")
+    ].filter(Boolean).join(" "));
+
+    if (/\blog[ -]?in\b|\bsign[ -]?in\b|member login|เข้าสู่ระบบ/.test(surface)) return "login";
+    if (/\bregister\b|\bsign[ -]?up\b|create account|สมัครสมาชิก|สมัคร/.test(surface)) return "registration";
+    if (/\bdeposit\b|\bwithdraw\b|cashier|ฝากเงิน|ถอนเงิน/.test(surface)) return "deposit-withdrawal";
+    if (/\bpayment\b|\bpay now\b|credit card|bank transfer|ชำระเงิน|โอนเงิน/.test(surface)) return "payment";
+    if (/\bwallet\b|connect wallet|crypto|กระเป๋า/.test(surface)) return "wallet";
+    if (/upload|identity|national id|passport|\bkyc\b|ยืนยันตัวตน|บัตรประชาชน/.test(surface)) return "identity-upload";
+    if (/remote access|remote support|anydesk|teamviewer|quick assist|ควบคุมระยะไกล|รีโมต/.test(surface)) return "remote-support";
+    if (/loan application|credit approval|investment deposit|broker account|สมัครสินเชื่อ|เปิดบัญชีลงทุน/.test(surface)) return "financial-application";
+    return "";
+  }
+
   function getScriptSurface(script) {
     return normalizeText([
       script.src,
@@ -271,6 +263,20 @@
       rect.height >= 60 &&
       (ratio >= 1.65 || rect.width >= window.innerWidth * 0.35)
     );
+  }
+
+  function collectLogoCandidates(images) {
+    const iconLinks = Array.from(document.querySelectorAll("link[rel~='icon'][href], link[rel='apple-touch-icon'][href]"));
+    const likelyLogos = images.filter((image) => {
+      const surface = getAttributeSurface(image);
+      if (/logo|brand|ตราสัญลักษณ์|โลโก้/.test(surface)) return true;
+      if (!isVisibleElement(image)) return false;
+      const rect = image.getBoundingClientRect();
+      return rect.width >= 24 && rect.height >= 24 && rect.width <= 600 && rect.height <= 300;
+    });
+    return unique(iconLinks.map((link) => sanitizeUrl(link.href)).concat(
+      likelyLogos.map((image) => sanitizeUrl(image.currentSrc || image.src))
+    )).filter(Boolean).slice(0, 5);
   }
 
   function getAdHeavySignals(images, links, safeSurface) {
@@ -357,6 +363,7 @@
     let emptyFormActionCount = 0;
     let httpFormActionCount = 0;
     let crossDomainFormActionCount = 0;
+    let knownIdentityProviderFormCount = 0;
     let passwordCrossDomainForm = false;
     let otpOrPaymentCrossDomainForm = false;
     let passwordHttpForm = false;
@@ -380,7 +387,9 @@
       formActionUrls.push(actionMeta.sanitizedUrl);
 
       const isHttpAction = actionMeta.protocol === "http:";
-      const isCrossDomainAction = actionMeta.hostname && !isSameSiteDomain(currentDomain, actionMeta.hostname);
+      const isKnownIdentityAction = isKnownIdentityProvider(actionMeta.hostname);
+      const isKnownPaymentAction = isKnownPaymentProvider(actionMeta.hostname);
+      const isCrossDomainAction = actionMeta.hostname && !isSameSiteDomain(currentDomain, actionMeta.hostname) && !isKnownIdentityAction && !isKnownPaymentAction;
       const formInputs = Array.from(form.querySelectorAll("input, textarea, select"));
       const sensitiveKinds = formInputs.map(getSensitiveFieldKind).filter(Boolean);
       const hasPasswordInForm = sensitiveKinds.includes("password");
@@ -400,6 +409,7 @@
         passwordCrossDomainForm = passwordCrossDomainForm || hasPasswordInForm;
         otpOrPaymentCrossDomainForm = otpOrPaymentCrossDomainForm || hasOtpPaymentBankField;
       }
+      if (isKnownIdentityAction) knownIdentityProviderFormCount += 1;
 
       passwordHttpForm = passwordHttpForm || (isHttpAction && hasPasswordInForm);
       otpOrPaymentHttpForm = otpOrPaymentHttpForm || (isHttpAction && hasOtpPaymentBankField);
@@ -441,6 +451,7 @@
       emptyFormActionCount,
       httpFormActionCount,
       crossDomainFormActionCount,
+      knownIdentityProviderFormCount,
       passwordCrossDomainForm,
       otpOrPaymentCrossDomainForm,
       passwordHttpForm,
@@ -475,6 +486,13 @@
     const clipboardReadIndicator = /navigator\.clipboard|readtext\s*\(/.test(combinedScriptSurface);
     const fileMetadataHarvestIndicator = /files\s*\)|\.files|file\.name|file\.size|file\.type/.test(combinedScriptSurface) && inputs.some((input) => normalizeText(input.type) === "file");
     const guardedNetworkToggleIndicator = /allownetwork|argus_test_allow_network|typedvaluesincluded|valueincluded|valuesincluded/.test(combinedScriptSurface);
+    const formValueReadIndicator = /(?:queryselector|getelementbyid|elements|target|currenttarget)[^;{}]{0,100}\.value\b|\.value\s*[;,)]/i.test(combinedScriptSurface);
+    const formDataReadIndicator = /new\s+formdata\s*\(|formdata\s*\(/i.test(combinedScriptSurface);
+    const sensitiveStorageWriteIndicator = /(?:localstorage|sessionstorage)\.setitem\s*\([^)]{0,160}(?:password|passwd|otp|token|secret|credential|recovery|seed|private|card|account)/i.test(combinedScriptSurface);
+    const cookieReadIndicator = /document\.cookie\b/i.test(combinedScriptSurface);
+    const encodedPayloadIndicator = /\b(?:btoa|encodeuricomponent|textencoder|string\.fromcharcode)\s*\(/i.test(combinedScriptSurface);
+    const webSocketSendIndicator = /new\s+websocket\s*\(|\.send\s*\([^)]{0,160}(?:value|formdata|password|otp|token|secret)/i.test(combinedScriptSurface);
+    const wildcardPostMessageIndicator = /postmessage\s*\([^)]{0,240}["']\*["']/i.test(combinedScriptSurface);
     const preventedSubmitIndicator = /preventdefault\s*\(/.test(combinedScriptSurface) && forms.length > 0;
     const localFormWithJsSinkIndicator = forms.some((form) => {
       const actionMeta = getUrlMetadata(form.getAttribute("action") || "");
@@ -509,11 +527,46 @@
       clipboardReadIndicator,
       fileMetadataHarvestIndicator,
       guardedNetworkToggleIndicator,
+      formValueReadIndicator,
+      formDataReadIndicator,
+      sensitiveStorageWriteIndicator,
+      cookieReadIndicator,
+      encodedPayloadIndicator,
+      webSocketSendIndicator,
+      wildcardPostMessageIndicator,
       preventedSubmitIndicator,
       localFormWithJsSinkIndicator,
       credentialLikeTextFieldCount,
       sensitiveTextareaCount,
       deceptiveLowFrictionContent
+    };
+  }
+
+  function extractSecuritySignals(scripts, iframes, currentDomain) {
+    const thirdPartyScriptWithoutIntegrityCount = scripts.filter((script) => {
+      if (!script.src || script.integrity) return false;
+      const meta = getUrlMetadata(script.src);
+      return meta.hostname && !isSameSiteDomain(currentDomain, meta.hostname);
+    }).length;
+    const unsandboxedThirdPartyIframeCount = iframes.filter((iframe) => {
+      if (!iframe.src || iframe.hasAttribute("sandbox")) return false;
+      const meta = getUrlMetadata(iframe.src);
+      return meta.hostname && !isSameSiteDomain(currentDomain, meta.hostname);
+    }).length;
+    const metaCsp = Boolean(document.querySelector("meta[http-equiv='Content-Security-Policy' i]"));
+
+    return {
+      responseHeadersObserved: false,
+      hasContentSecurityPolicy: metaCsp,
+      hasStrictTransportSecurity: false,
+      hasXContentTypeOptions: false,
+      hasReferrerPolicy: Boolean(document.querySelector("meta[name='referrer' i]")),
+      hasPermissionsPolicy: false,
+      missingSecurityHeaderCount: 0,
+      mixedContentRequestCount: 0,
+      insecureActiveContentRequestCount: 0,
+      thirdPartyScriptWithoutIntegrityCount,
+      unsandboxedThirdPartyIframeCount
     };
   }
 
@@ -543,6 +596,46 @@
   function countPattern(value, pattern) {
     const matches = String(value || "").match(pattern);
     return matches ? matches.length : 0;
+  }
+
+  function extractUrlLexicalSignals(parsedUrl) {
+    const domain = parsedUrl.hostname.toLowerCase();
+    const labels = domain.split(".").filter(Boolean);
+    const siteLabels = getSiteDomain(domain).split(".").filter(Boolean).length;
+    const subdomainCount = Math.max(0, labels.length - siteLabels);
+    const digitCount = (domain.match(/\d/g) || []).length;
+    const hyphenCount = (domain.match(/-/g) || []).length;
+    const encodedCharCount = (parsedUrl.pathname.match(/%[0-9a-f]{2}/gi) || []).length;
+    const credentialPathWordCount = (normalizeText(parsedUrl.pathname).match(/login|signin|sign-in|verify|account|auth|secure|wallet|bank/g) || []).length;
+    const hasAtSymbol = parsedUrl.href.includes("@");
+    const isDomainIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(domain) || /^\[[0-9a-f:]+\]$/i.test(domain);
+    const hasObfuscation = encodedCharCount >= 2 || hasAtSymbol || domain.startsWith("xn--") || domain.includes(".xn--");
+    const domainDigitRatio = digitCount / Math.max(1, domain.length);
+    const excessiveSubdomainCount = Math.max(0, subdomainCount - 2);
+    const lexicalRiskCount = [
+      isDomainIP,
+      parsedUrl.href.length >= 100,
+      excessiveSubdomainCount >= 2,
+      hasObfuscation,
+      domainDigitRatio >= 0.25,
+      hyphenCount >= 3,
+      credentialPathWordCount >= 1
+    ].filter(Boolean).length;
+
+    return {
+      urlLength: parsedUrl.href.length,
+      domainLength: domain.length,
+      isDomainIP,
+      subdomainCount,
+      excessiveSubdomainCount,
+      hasObfuscation,
+      obfuscatedCharCount: encodedCharCount,
+      domainDigitRatio,
+      hyphenCount,
+      credentialPathWordCount,
+      hasAtSymbol,
+      lexicalRiskCount
+    };
   }
 
   function scanPage() {
@@ -575,6 +668,13 @@
       metaSurface,
       getLimitedPageTextSurface()
     ].join(" "));
+    const identityTextSurface = normalizeText([
+      document.title,
+      metaSurface,
+      Array.from(document.querySelectorAll("h1, h2, h3, label")).slice(0, 80).map((element) => getElementText(element)).join(" "),
+      buttonSurface,
+      images.filter((image) => /logo|brand|โลโก้|ตราสัญลักษณ์/.test(getAttributeSurface(image))).slice(0, 20).map((image) => `${image.alt || ""} ${image.title || ""}`).join(" ")
+    ].join(" "));
 
     const passwordFields = inputs.filter((input) => normalizeText(input.type) === "password");
     const otpFields = inputs.filter((input) => collectKeywordMatches(getInputSurface(input), KEYWORDS.otp).length > 0);
@@ -595,24 +695,39 @@
       adult: collectKeywordMatches(safeKeywordSurface, KEYWORDS.adult),
       banking: collectKeywordMatches(safeKeywordSurface, KEYWORDS.banking),
       investment: collectKeywordMatches(safeKeywordSurface, KEYWORDS.investment),
+      paymentWallet: collectKeywordMatches(safeKeywordSurface, KEYWORDS.paymentWallet || []),
+      government: collectKeywordMatches(safeKeywordSurface, KEYWORDS.government || []),
+      telecomUtility: collectKeywordMatches(safeKeywordSurface, KEYWORDS.telecomUtility || []),
+      delivery: collectKeywordMatches(safeKeywordSurface, KEYWORDS.delivery || []),
+      platformAccount: collectKeywordMatches(safeKeywordSurface, KEYWORDS.platformAccount || []),
+      jobCharityFee: collectKeywordMatches(safeKeywordSurface, KEYWORDS.jobCharityFee || []),
       techSupport: collectKeywordMatches(safeKeywordSurface, KEYWORDS.techSupport),
       popupAbuse: collectKeywordMatches(safeKeywordSurface, KEYWORDS.popupAbuse),
       fakeShopping: collectKeywordMatches(safeKeywordSurface, KEYWORDS.fakeShopping),
       prize: collectKeywordMatches(safeKeywordSurface, KEYWORDS.prize),
       pirated: collectKeywordMatches(safeKeywordSurface, KEYWORDS.pirated)
     };
+    const sensitiveFieldKinds = unique(inputs.map(getSensitiveFieldKind).filter(Boolean));
+    const sensitiveActionKinds = unique(
+      forms.concat(buttons, links).map(getSensitiveActionKind).filter(Boolean).concat(sensitiveFieldKinds)
+    );
 
     return {
       url,
       domain,
       pathname,
       pageProtocol: parsedUrl.protocol,
+      urlLexicalSignals: extractUrlLexicalSignals(parsedUrl),
       isSearchEnginePage: isSearchEnginePage(url, domain, pathname),
       isTrustedDomain: isTrustedDomain(domain),
       passwordFieldCount: passwordFields.length,
       hasPasswordField: passwordFields.length > 0,
       hasOTP: collectKeywordMatches(safeKeywordSurface, KEYWORDS.otp).length > 0 || otpFields.length > 0,
       hasLoginKeyword: collectKeywordMatches(safeKeywordSurface, KEYWORDS.login).length > 0,
+      hasSensitiveActionSurface: sensitiveActionKinds.length > 0,
+      sensitiveActionKinds: sensitiveActionKinds.slice(0, 10),
+      identityTextSurface: truncate(identityTextSurface, 6000),
+      logoCandidates: collectLogoCandidates(images),
       inputFieldCount: inputs.length,
       apkLinks,
       buttonTexts,
@@ -623,12 +738,20 @@
       foundAdultKeywords: categoryKeywordSignals.adult,
       foundBankingKeywords: categoryKeywordSignals.banking,
       foundInvestmentKeywords: categoryKeywordSignals.investment,
+      foundPaymentWalletKeywords: categoryKeywordSignals.paymentWallet,
+      foundGovernmentKeywords: categoryKeywordSignals.government,
+      foundTelecomUtilityKeywords: categoryKeywordSignals.telecomUtility,
+      foundDeliveryKeywords: categoryKeywordSignals.delivery,
+      foundPlatformAccountKeywords: categoryKeywordSignals.platformAccount,
+      foundJobCharityFeeKeywords: categoryKeywordSignals.jobCharityFee,
       foundTechSupportKeywords: categoryKeywordSignals.techSupport,
       foundPopupAbuseKeywords: categoryKeywordSignals.popupAbuse,
       foundFakeShoppingKeywords: categoryKeywordSignals.fakeShopping,
       foundPrizeKeywords: categoryKeywordSignals.prize,
       foundPiratedKeywords: categoryKeywordSignals.pirated,
       dataLeakSignals: extractDataLeakSignals(forms, links, buttons, iframes, scripts, domain),
+      securitySignals: extractSecuritySignals(scripts, iframes, domain),
+      pageKey: getPageKey(),
       ...getAdHeavySignals(images, links, safeKeywordSurface),
       timestamp: new Date().toISOString()
     };
@@ -636,16 +759,25 @@
 
   function sendPageEvent(type, extra = {}) {
     const eventKey = `${type}:${extra.domain || window.location.hostname}`;
-    if (type === PASSWORD_FOCUS_MESSAGE && sentPageEvents.has(eventKey)) {
-      return;
+    // Throttle (not permanently suppress) sensitive-focus events: focusin fires
+    // repeatedly, but a genuine later interaction must re-arm the correlation
+    // window in the worker. A permanent per-domain dedup left only the first focus
+    // able to correlate a post-interaction exfiltration request (F14).
+    if (type === PASSWORD_FOCUS_MESSAGE) {
+      const lastSentAt = sentPageEvents.get(eventKey) || 0;
+      if (Date.now() - lastSentAt < PASSWORD_FOCUS_THROTTLE_MS) {
+        return;
+      }
     }
 
-    sentPageEvents.add(eventKey);
+    sentPageEvents.set(eventKey, Date.now());
     chrome.runtime.sendMessage({
       type,
       payload: {
         url: sanitizeUrl(window.location.href),
         domain: window.location.hostname.toLowerCase(),
+        pageKey: getPageKey(),
+        navigationId: currentNavigationId,
         timestamp: new Date().toISOString(),
         ...extra
       }
@@ -673,7 +805,8 @@
         formActionUrl: action,
         formMethod: normalizeText(form && form.method || "get").toUpperCase(),
         actionProtocol: actionMeta.protocol,
-        isCrossDomainAction: Boolean(actionMeta.hostname && !isSameSiteDomain(window.location.hostname, actionMeta.hostname)),
+        isCrossDomainAction: Boolean(actionMeta.hostname && !isSameSiteDomain(window.location.hostname, actionMeta.hostname) && !isKnownIdentityProvider(actionMeta.hostname) && !isKnownPaymentProvider(actionMeta.hostname)),
+        destinationRole: isKnownIdentityProvider(actionMeta.hostname) ? "KNOWN_IDENTITY_PROVIDER" : isKnownPaymentProvider(actionMeta.hostname) ? "KNOWN_PAYMENT_PROVIDER" : "FORM_DESTINATION",
         hasSensitiveFields: sensitiveKinds.length > 0,
         hasPasswordField: sensitiveKinds.includes("password"),
         hasOtpOrPaymentField: sensitiveKinds.some((kind) => kind === "verification" || kind === "payment"),
@@ -689,6 +822,10 @@
 
       const text = getElementText(target);
       const href = target.href || "";
+      const sensitiveActionKind = getSensitiveActionKind(target);
+      if (sensitiveActionKind) {
+        sendPageEvent(PASSWORD_FOCUS_MESSAGE, { sensitiveKind: sensitiveActionKind });
+      }
       if (isApkHref(href) || /download|install|continue to download|download apk|install app|ดาวน์โหลด|ติดตั้ง/i.test(text)) {
         sendPageEvent(DOWNLOAD_CLICKED_MESSAGE, {
           clickedUrl: href ? sanitizeUrl(href) : "",
@@ -698,11 +835,16 @@
     }, true);
   }
 
-  function sendScanResult() {
+  function sendScanResult(scanPhase = "FINAL") {
+    const requestedPageKey = currentPageKey;
     const payload = scanPage();
+    payload.scanPhase = scanPhase;
     setBadgeScanning();
 
     chrome.runtime.sendMessage({ type: SCAN_MESSAGE, payload }, (response) => {
+      if (requestedPageKey !== currentPageKey || payload.pageKey !== getPageKey()) {
+        return;
+      }
       if (chrome.runtime.lastError || !response || !response.ok || !response.result) {
         updateScanBadge({
           risk: {
@@ -717,7 +859,100 @@
       }
 
       updateScanBadge(response.result);
+      currentNavigationId = response.result.navigationId || currentNavigationId;
+      if (scanPhase === "PRELIMINARY" && response.result.settings && response.result.settings.progressiveScan) {
+        if (finalScanTimer) window.clearTimeout(finalScanTimer);
+        finalScanTimer = window.setTimeout(
+          () => sendScanResult("FINAL"),
+          Number(response.result.settings.observationWindowMs) || 4000
+        );
+      }
     });
+  }
+
+  function getPageKey() {
+    try {
+      const parsed = new URL(window.location.href);
+      return `${parsed.origin}${parsed.pathname}#${routeFingerprint(`${parsed.search}${parsed.hash}`)}`;
+    } catch (error) {
+      return String(window.location.href || "");
+    }
+  }
+
+  function routeFingerprint(value) {
+    let hash = 2166136261;
+    for (const character of String(value || "")) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  function handlePageChange() {
+    const nextPageKey = getPageKey();
+    if (nextPageKey === currentPageKey) return;
+
+    currentPageKey = nextPageKey;
+    currentNavigationId = null;
+    sentPageEvents.clear();
+    const badge = document.getElementById(BADGE_ID);
+    const panel = document.getElementById(BADGE_PANEL_ID);
+    if (badge) badge.dataset.argusHasResult = "false";
+    if (panel) panel.hidden = true;
+    setBadgeScanning();
+
+    chrome.runtime.sendMessage({
+      type: PAGE_CHANGED_MESSAGE,
+      payload: {
+        pageKey: nextPageKey,
+        url: sanitizeUrl(window.location.href),
+        domain: window.location.hostname.toLowerCase()
+      }
+    }, (response) => {
+      if (chrome.runtime.lastError) return;
+      // Adopt the fresh navigation id immediately so sensitive events fired
+      // before the first scan response are not rejected as stale.
+      if (response && response.navigationId && getPageKey() === nextPageKey) {
+        currentNavigationId = response.navigationId;
+      }
+    });
+
+    if (pageChangeTimer) window.clearTimeout(pageChangeTimer);
+    pageChangeTimer = window.setTimeout(() => sendScanResult("PRELIMINARY"), 120);
+    if (finalScanTimer) window.clearTimeout(finalScanTimer);
+    finalScanTimer = window.setTimeout(() => sendScanResult("FINAL"), 4000);
+  }
+
+  function installNavigationObserver() {
+    ["pushState", "replaceState"].forEach((methodName) => {
+      const original = window.history[methodName];
+      if (typeof original !== "function" || original.__argusWrapped) return;
+      const wrapped = function argusHistoryChange(...args) {
+        const result = original.apply(this, args);
+        queueMicrotask(handlePageChange);
+        return result;
+      };
+      wrapped.__argusWrapped = true;
+      window.history[methodName] = wrapped;
+    });
+    window.addEventListener("popstate", handlePageChange, true);
+    window.addEventListener("hashchange", handlePageChange, true);
+  }
+
+  function installSensitiveSurfaceObserver() {
+    let rescanTimer = null;
+    const observer = new MutationObserver((mutations) => {
+      const relevant = mutations.some((mutation) => Array.from(mutation.addedNodes || []).some((node) => {
+        if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+        if (node.id === BADGE_ID || node.id === BADGE_PANEL_ID || node.closest && node.closest(`#${BADGE_PANEL_ID}`)) return false;
+        return /^(FORM|INPUT|TEXTAREA|SELECT|BUTTON|A|IFRAME)$/.test(node.tagName) ||
+          Boolean(node.querySelector && node.querySelector("form, input, textarea, select, button, a[href], iframe"));
+      }));
+      if (!relevant) return;
+      if (rescanTimer) window.clearTimeout(rescanTimer);
+      rescanTimer = window.setTimeout(() => sendScanResult("FINAL"), 500);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   function showScanBadge() {
@@ -776,10 +1011,31 @@
       </div>
       <div class="argus-scan-detail-score-row"><span>Risk score</span><strong class="argus-scan-detail-score">--/100</strong></div>
       <div class="argus-scan-detail-source">Analysis source: waiting</div>
+      <div class="argus-scan-detail-identity">Identity context: waiting</div>
       <div class="argus-scan-detail-reasons-title">Why Argus thinks this</div>
       <ul class="argus-scan-detail-reasons"><li>Scan is starting.</li></ul>
+      <button class="argus-report-false-positive" type="button">Report False Positive</button>
+      <div class="argus-feedback-status" aria-live="polite"></div>
     `;
+    panel.querySelector(".argus-report-false-positive").addEventListener("click", reportFalsePositive);
     return panel;
+  }
+
+  function reportFalsePositive() {
+    const panel = document.getElementById(BADGE_PANEL_ID);
+    const status = panel && panel.querySelector(".argus-feedback-status");
+    if (!latestRenderedScan || !status) return;
+    status.textContent = "Saving feedback...";
+    chrome.runtime.sendMessage({ type: "ARGUS_REPORT_FALSE_POSITIVE", payload: latestRenderedScan }, (response) => {
+      if (chrome.runtime.lastError || !response || !response.ok) {
+        status.textContent = "Saved locally when the extension is available.";
+        return;
+      }
+      const delivery = response.result && response.result.delivery;
+      status.textContent = delivery && delivery.status === "SENT"
+        ? "Feedback saved and sent to the local collector."
+        : "Feedback saved locally and queued for the collector.";
+    });
   }
 
   function setBadgeScanning() {
@@ -819,7 +1075,10 @@
       return;
     }
 
+    latestRenderedScan = scan;
+    const hadFinalResult = badge.dataset.argusHasResult === "true";
     const risk = scan.risk || {};
+    const previousWarningStage = badge.dataset.argusWarningStage || "NONE";
     const score = getRiskScore(risk);
     const level = formatRiskLevel(risk.level);
     const riskClass = getRiskClass(risk.level);
@@ -837,18 +1096,30 @@
     badge.hidden = false;
 
     badge.dataset.argusHasResult = score === "--" ? "false" : "true";
-    badge.classList.remove("argus-risk-scanning", "argus-risk-safe", "argus-risk-suspicious", "argus-risk-high");
+    badge.classList.remove("argus-risk-scanning", "argus-risk-safe", "argus-risk-monitoring", "argus-risk-category", "argus-risk-suspicious", "argus-risk-high");
     badge.classList.add(riskClass);
-    badge.querySelector(".argus-scan-badge-text").textContent = level === "SCANNING" ? "Argus scanning" : level;
-    badge.querySelector(".argus-scan-badge-score").textContent = `${score}/100`;
-    badge.setAttribute("aria-label", `Project Argus risk score ${score} out of 100. ${level}. Click for details.`);
+    const observing = scan.isFinal === false;
+    const displayedScore = observing ? "--" : score;
+    badge.dataset.argusHasResult = observing ? "false" : badge.dataset.argusHasResult;
+    badge.dataset.argusWarningStage = String(risk.warningStage || "NONE");
+    badge.querySelector(".argus-scan-badge-text").textContent = observing ? "OBSERVING" : level === "SCANNING" ? "Argus scanning" : level;
+    badge.querySelector(".argus-scan-badge-score").textContent = `${displayedScore}/100`;
+    badge.setAttribute("aria-label", observing
+      ? "Project Argus is observing page and network behavior. Final score pending."
+      : `Project Argus risk score ${score} out of 100. ${level}. Click for details.`);
 
-    panel.classList.remove("argus-risk-scanning", "argus-risk-safe", "argus-risk-suspicious", "argus-risk-high");
+    panel.classList.remove("argus-risk-scanning", "argus-risk-safe", "argus-risk-monitoring", "argus-risk-category", "argus-risk-suspicious", "argus-risk-high");
     panel.classList.add(riskClass);
-    panel.querySelector(".argus-scan-detail-level").textContent = level;
-    panel.querySelector(".argus-scan-detail-score").textContent = `${score}/100`;
+    applyRiskPalette(panel, riskClass);
+    panel.querySelector(".argus-scan-detail-level").textContent = observing ? "OBSERVING" : level;
+    panel.querySelector(".argus-scan-detail-score").textContent = `${displayedScore}/100`;
     const tier = risk.decisionTier ? ` | ${risk.decisionTier.replaceAll("_", " ").toLowerCase()}` : "";
     panel.querySelector(".argus-scan-detail-source").textContent = `Analysis source: ${source}${tier}`;
+    const claimed = Array.isArray(risk.claimedBrands) ? risk.claimedBrands.map((brand) => brand.displayName || brand.brandId).filter(Boolean).slice(0, 3) : [];
+    const contextLabel = String(risk.riskContext || "UNKNOWN").replaceAll("_", " ");
+    panel.querySelector(".argus-scan-detail-identity").textContent = claimed.length
+      ? `Context: ${contextLabel} | Claimed identity: ${claimed.join(", ")} | Actual domain: ${window.location.hostname}`
+      : `Context: ${contextLabel} | Actual domain: ${window.location.hostname}`;
     panel.querySelector(".argus-scan-detail-reasons").replaceChildren(
       ...reasons.slice(0, 6).map((reason) => {
         const item = document.createElement("li");
@@ -856,6 +1127,40 @@
         return item;
       })
     );
+
+    if (!observing && !hadFinalResult) {
+      panel.hidden = true;
+      badge.classList.remove("argus-scan-badge--expanded");
+      badge.setAttribute("aria-expanded", "false");
+    }
+    if (!observing && risk.warningAllowed && risk.warningStage === "INTERACTION" && previousWarningStage !== "INTERACTION") {
+      panel.hidden = false;
+      badge.classList.add("argus-scan-badge--expanded");
+      badge.setAttribute("aria-expanded", "true");
+    }
+  }
+
+  function applyRiskPalette(panel, riskClass) {
+    const palettes = {
+      "argus-risk-safe": { border: "rgba(67, 209, 125, 0.72)", glow: "rgba(67, 209, 125, 0.24)", accent: "#43d17d", ink: "#06140b" },
+      "argus-risk-suspicious": { border: "rgba(255, 200, 87, 0.82)", glow: "rgba(255, 200, 87, 0.3)", accent: "#ffc857", ink: "#1b1200" },
+      "argus-risk-category": { border: "rgba(255, 159, 67, 0.82)", glow: "rgba(255, 159, 67, 0.3)", accent: "#ff9f43", ink: "#1b0d00" },
+      "argus-risk-high": { border: "rgba(255, 46, 77, 0.88)", glow: "rgba(255, 46, 77, 0.36)", accent: "#ff2e4d", ink: "#ffffff" },
+      "argus-risk-monitoring": { border: "rgba(112, 214, 255, 0.68)", glow: "rgba(112, 214, 255, 0.22)", accent: "#70d6ff", ink: "#07101f" },
+      "argus-risk-scanning": { border: "rgba(112, 214, 255, 0.42)", glow: "rgba(112, 214, 255, 0.18)", accent: "#70d6ff", ink: "#07101f" }
+    };
+    const palette = palettes[riskClass] || palettes["argus-risk-scanning"];
+    panel.style.setProperty("border-color", palette.border, "important");
+    panel.style.setProperty("box-shadow", `0 18px 48px rgba(0, 0, 0, 0.42), 0 0 24px ${palette.glow}`, "important");
+    const level = panel.querySelector(".argus-scan-detail-level");
+    const score = panel.querySelector(".argus-scan-detail-score");
+    const report = panel.querySelector(".argus-report-false-positive");
+    if (level) {
+      level.style.setProperty("background", palette.accent, "important");
+      level.style.setProperty("color", palette.ink, "important");
+    }
+    if (score) score.style.setProperty("color", palette.accent, "important");
+    if (report) report.style.setProperty("border-color", palette.border, "important");
   }
 
   function getRiskScore(risk) {
@@ -875,6 +1180,12 @@
     }
     if (normalized === "SUSPICIOUS") {
       return "argus-risk-suspicious";
+    }
+    if (normalized === "RISKY_CONTEXT") {
+      return "argus-risk-category";
+    }
+    if (normalized === "MONITORING" || normalized === "UNCERTAIN") {
+      return "argus-risk-monitoring";
     }
     if (normalized === "SAFE") {
       return "argus-risk-safe";
@@ -897,128 +1208,23 @@
     return formatted.toUpperCase() === "SCANNING" ? "Scanning" : formatted.toUpperCase();
   }
 
-  function appendText(parent, tagName, className, text) {
-    const element = document.createElement(tagName);
-    element.className = className;
-    element.textContent = text;
-    parent.appendChild(element);
-    return element;
-  }
-
-  function showWarning(risk) {
-    const warningSignature = JSON.stringify({
-      score: getRiskScore(risk),
-      level: risk.level,
-      category: risk.category,
-      reasons: Array.isArray(risk.reasons) ? risk.reasons.slice(0, 3) : []
-    });
-
-    if ((risk.demoMode || (risk.settings && risk.settings.demoMode)) && warningSignature === lastDemoWarningSignature && document.getElementById(OVERLAY_ID)) {
-      return;
-    }
-
-    lastDemoWarningSignature = warningSignature;
-    const oldOverlay = document.getElementById(OVERLAY_ID);
-    if (oldOverlay) {
-      oldOverlay.remove();
-    }
-
-    const overlay = document.createElement("aside");
-    overlay.id = OVERLAY_ID;
-    overlay.className = "argus-warning-overlay";
-    overlay.setAttribute("role", "alertdialog");
-    overlay.setAttribute("aria-live", "assertive");
-    overlay.setAttribute("aria-label", "Project Argus warning");
-
-    const card = document.createElement("div");
-    card.className = "argus-warning-card";
-    overlay.appendChild(card);
-
-    appendText(card, "div", "argus-warning-kicker", "Project Argus Warning");
-    appendText(card, "h2", "argus-warning-title", formatRiskLevel(risk.level));
-    appendText(card, "p", "argus-warning-message", "This page has risk indicators. Review the reasons before entering sensitive information or downloading files.");
-
-    const scoreRow = document.createElement("div");
-    scoreRow.className = "argus-warning-score-row";
-    card.appendChild(scoreRow);
-    appendText(scoreRow, "span", "argus-warning-score-label", risk.category || "UNKNOWN");
-    appendText(scoreRow, "strong", "argus-warning-score", `${getRiskScore(risk)}/100`);
-    if (Number.isFinite(Number(risk.confidence))) {
-      const tier = risk.decisionTier ? ` · ${risk.decisionTier.replaceAll("_", " ")}` : "";
-      appendText(card, "p", "argus-warning-message", `Detection confidence: ${Math.round(Number(risk.confidence) * 100)}% · Policy ${risk.policyVersion || "local"}${tier}`);
-    }
-
-    const reasonsTitle = appendText(card, "div", "argus-warning-reasons-title", "Top reasons");
-    reasonsTitle.id = "argus-warning-reasons-title";
-    const reasonsList = document.createElement("ul");
-    reasonsList.className = "argus-warning-reasons";
-    reasonsList.setAttribute("aria-labelledby", reasonsTitle.id);
-    card.appendChild(reasonsList);
-
-    (risk.reasons && risk.reasons.length ? risk.reasons : ["Suspicious page behavior detected."])
-      .slice(0, 3)
-      .forEach((reason) => appendText(reasonsList, "li", "argus-warning-reason", reason));
-
-    const actions = document.createElement("div");
-    actions.className = "argus-warning-actions";
-    card.appendChild(actions);
-
-    const goBack = document.createElement("button");
-    goBack.type = "button";
-    goBack.className = "argus-warning-action argus-warning-action-primary";
-    goBack.textContent = "Go Back";
-    goBack.addEventListener("click", () => window.history.back());
-    actions.appendChild(goBack);
-
-    const continueAnyway = document.createElement("button");
-    continueAnyway.type = "button";
-    continueAnyway.className = "argus-warning-action";
-    continueAnyway.textContent = "Continue Anyway";
-    continueAnyway.addEventListener("click", () => overlay.remove());
-    actions.appendChild(continueAnyway);
-
-    const report = document.createElement("button");
-    report.type = "button";
-    report.className = "argus-warning-action";
-    report.textContent = "Report False Positive";
-    report.addEventListener("click", () => {
-      chrome.runtime.sendMessage({
-        type: "ARGUS_REPORT_FALSE_POSITIVE",
-        payload: {
-          domain: window.location.hostname,
-          score: getRiskScore(risk),
-          level: risk.level,
-          category: risk.category,
-          reasons: Array.isArray(risk.reasons) ? risk.reasons.slice(0, 8) : [],
-          timestamp: new Date().toISOString()
-        }
-      });
-      report.textContent = "Reported";
-      report.disabled = true;
-    });
-    actions.appendChild(report);
-
-    document.documentElement.appendChild(overlay);
-  }
-
   chrome.runtime.onMessage.addListener((message) => {
     if (!message || !message.type) {
       return;
     }
 
-    if (message.type === WARNING_MESSAGE) {
-      showWarning(message.payload);
-    }
-
     if (message.type === RESCAN_MESSAGE) {
-      sendScanResult();
+      sendScanResult(message.scanPhase || "FINAL");
     }
   });
 
   function startArgusScan() {
     installPageEventListeners();
+    installNavigationObserver();
+    installSensitiveSurfaceObserver();
     showScanBadge();
-    sendScanResult();
+    sendScanResult("PRELIMINARY");
+    finalScanTimer = window.setTimeout(() => sendScanResult("FINAL"), 4000);
   }
 
   if (document.readyState === "loading") {
@@ -1027,6 +1233,4 @@
     startArgusScan();
   }
 
-  setTimeout(sendScanResult, 1500);
-  setTimeout(sendScanResult, 4000);
 }());

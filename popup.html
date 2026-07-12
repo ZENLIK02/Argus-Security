@@ -14,6 +14,7 @@
       --muted: #96a7c4;
       --safe: #43d17d;
       --suspicious: #ffc857;
+      --category-risk: #ff9f43;
       --high: #ff4d5e;
       --accent: #70d6ff;
     }
@@ -92,6 +93,14 @@
 
     .suspicious {
       color: var(--suspicious);
+    }
+
+    .risky-category {
+      color: var(--category-risk);
+    }
+
+    .monitoring {
+      color: var(--accent);
     }
 
     .high-risk {
@@ -226,20 +235,22 @@
 
   <section class="card" aria-live="polite">
     <p class="label">Current domain</p>
-    <p id="domain">Loading...</p>
+        <p id="domain" data-testid="argus-domain">Loading...</p>
 
     <div class="score-row">
-      <div id="score">--</div>
-      <div id="level">Scanning</div>
+          <div id="score" data-testid="argus-policy-score">--</div>
+          <div id="level" data-testid="argus-policy-status">Scanning</div>
     </div>
 
     <p id="category" class="meta-line">Category: waiting</p>
     <p id="source" class="meta-line">Source: waiting</p>
     <p id="trusted" class="meta-line">Trusted domain: waiting</p>
     <p id="model" class="meta-line">Model: waiting</p>
-    <p id="confidence" class="meta-line">Confidence: waiting</p>
-    <p id="policy" class="meta-line">Policy: waiting</p>
+          <p id="confidence" data-testid="argus-confidence" class="meta-line">Confidence: waiting</p>
+          <p id="policy" data-testid="argus-policy-version" class="meta-line">Policy: waiting</p>
     <p id="decisionTier" class="meta-line">Decision tier: waiting</p>
+    <p id="evidenceLevel" class="meta-line">Evidence level: waiting</p>
+    <p id="warningPermission" class="meta-line">Warning permission: waiting</p>
     <div class="guard-section" aria-label="Data Leak Guard">
       <p class="guard-title">Data Leak Guard</p>
       <div id="guardGrid" class="guard-grid"></div>
@@ -251,12 +262,15 @@
     <ul id="reasons"></ul>
     <p id="empty" class="empty" hidden>No scan has been recorded for this tab yet. Refresh the page and open this popup again.</p>
     <div class="actions">
-      <button id="exportReport" class="primary" type="button">Export Scan Report</button>
+        <button id="exportReport" data-testid="argus-export-report" class="primary" type="button">Export Scan Report</button>
+      <button id="reportFalsePositive" type="button">Report False Positive</button>
       <button id="openOptions" type="button">Open Options</button>
       <button id="clearScan" type="button">Clear Last Scan</button>
+      <p id="feedbackStatus" class="meta-line" aria-live="polite"></p>
     </div>
   </section>
 
+  <script src="engine/scan_freshness.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

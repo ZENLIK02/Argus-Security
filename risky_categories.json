@@ -1,5 +1,27 @@
 {
-  "version": "1.0",
+  "version": "5.3.0",
+  "_meta": {
+    "role": "REFERENCE_TAXONOMY",
+    "documentationOnly": true,
+    "notConsumedForScoring": true,
+    "description": "Human-readable category taxonomy and recommended actions. This file is NOT the scoring source. Detection weights, floors, priorities and thresholds live in engine/detection_policy.json; runtime keyword/pattern matching lives in content.js and service_worker.js; the final decision is made by engine/evidence_decision_policy.js. The keywords/urlPatterns/riskLevel fields below are illustrative only and are not read by the decision path.",
+    "authoritativeSources": {
+      "weights": "engine/detection_policy.json",
+      "decision": "engine/evidence_decision_policy.js",
+      "runtimeKeywords": "content.js"
+    }
+  },
+  "riskContexts": [
+    {"id":"BANKING_LENDING","displayName":"Banking and lending impersonation"},
+    {"id":"INVESTMENT_CRYPTO","displayName":"Investment, brokerage, and crypto impersonation"},
+    {"id":"PAYMENT_WALLET","displayName":"Payment and digital-wallet impersonation"},
+    {"id":"GOVERNMENT_PUBLIC_SERVICE","displayName":"Government and public-service impersonation"},
+    {"id":"TELECOM_UTILITY","displayName":"Telecom, utility, and subscription impersonation"},
+    {"id":"SHOPPING_DELIVERY","displayName":"Shopping, marketplace, and parcel-delivery impersonation"},
+    {"id":"PLATFORM_ACCOUNT","displayName":"Platform, email, social, and cloud-account impersonation"},
+    {"id":"TECH_SUPPORT_SECURITY","displayName":"Technical-support and security-alert impersonation"},
+    {"id":"REWARD_JOB_CHARITY_FEE","displayName":"Reward, employment, charity, and advance-fee scams"}
+  ],
   "categories": [
     {
       "id": "FAKE_APP_STORE",
@@ -49,11 +71,11 @@
     {
       "id": "GAMBLING",
       "displayName": "Gambling / Betting Content",
-      "riskLevel": "SUSPICIOUS",
+      "riskLevel": "RISKY_CONTEXT",
       "keywords": ["casino", "slot", "bet", "jackpot", "ufa", "pgslot", "บาคาร่า", "คาสิโน", "สล็อต", "พนัน", "ฝากถอน", "เครดิตฟรี"],
       "urlPatterns": ["casino", "slot", "bet", "jackpot", "ufa", "pgslot", "game66"],
       "signals": ["gambling promotion", "deposit button", "bonus claim", "line contact", "many gambling banners", "cross-domain form action", "insecure form action", "suspicious third-party requests"],
-      "recommendedAction": "Show content-risk warning by default. Never classify as phishing from gambling keywords alone; increase risk only with password, OTP, payment/deposit form, APK download, cross-domain form action, insecure HTTP form action, suspicious third-party requests, hidden iframe, or fake download behavior."
+      "recommendedAction": "Show a distinct unverified-gambling category caution before sensitive interaction. Never classify it as confirmed phishing or data theft from gambling keywords alone."
     },
     {
       "id": "ADULT_CONTENT",

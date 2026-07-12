@@ -1,10 +1,17 @@
 from pathlib import Path
+from datetime import datetime, timezone
+import json
 from typing import Any, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+try:
+    from .reputation import load_reputation_seed, normalize_hostname, query_google_web_risk
+except ImportError:
+    from reputation import load_reputation_seed, normalize_hostname, query_google_web_risk
 
 
 SUSPICIOUS_MIN_SCORE = 35
@@ -30,6 +37,8 @@ app.add_middleware(
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TEST_SITE_DIR = PROJECT_ROOT / "test-site"
 WEBSITE_TESTONLY_DIR = PROJECT_ROOT / "Website_testonly"
+FEEDBACK_DIR = Path(__file__).resolve().parent / "data"
+FALSE_POSITIVE_LOG = FEEDBACK_DIR / "false_positive_reports.jsonl"
 
 if TEST_SITE_DIR.exists():
     app.mount("/test-site", StaticFiles(directory=str(TEST_SITE_DIR), html=True), name="test-site")
@@ -40,6 +49,22 @@ if WEBSITE_TESTONLY_DIR.exists():
 
 RiskLevel = Literal["SAFE", "SUSPICIOUS", "HIGH_RISK"]
 ResultSource = Literal["LOCAL_MODEL"]
+
+
+class ReputationCheckRequest(BaseModel):
+    hostname: str = Field(min_length=1, max_length=253)
+
+
+class ReputationCheckResult(BaseModel):
+    hostname: str
+    verdict: Literal["UNKNOWN", "TRUSTED", "RISKY_CONTEXT", "MALICIOUS"]
+    confidence: Literal["LOW", "MEDIUM", "HIGH"]
+    sources: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    firstSeen: str | None = None
+    lastSeen: str | None = None
+    checkedAt: str
+    providerStatus: str
 
 
 class DataLeakSignals(BaseModel):
@@ -152,6 +177,42 @@ class AnalysisResult(BaseModel):
     source: ResultSource = "LOCAL_MODEL"
 
 
+class FalsePositiveReport(BaseModel):
+    reportId: str = Field(min_length=8, max_length=80)
+    domain: str = Field(max_length=180)
+    score: int = Field(ge=0, le=100)
+    level: str = Field(max_length=40)
+    category: str = Field(max_length=80)
+    reasons: list[str] = Field(default_factory=list, max_length=8)
+    timestamp: str
+    decisionTier: str = Field(default="UNKNOWN", max_length=60)
+    policyVersion: str = Field(default="unknown", max_length=40)
+    source: str = Field(default="LOCAL_MODEL", max_length=60)
+    popularDomainContext: dict[str, Any] = Field(default_factory=dict)
+    privacy: str = Field(default="", max_length=240)
+    delivery: dict[str, Any] = Field(default_factory=dict)
+    reportSchemaVersion: str = "2"
+    userLabel: str = "FALSE_POSITIVE_UNREVIEWED"
+    scoreBeforePolicy: int = 0
+    scoreAfterPolicy: int = 0
+    finalStatus: str = "UNKNOWN"
+    evidenceIds: list[str] = Field(default_factory=list)
+    evidenceGroups: list[str] = Field(default_factory=list)
+    modelScore: int = 0
+    modelOnly: bool = False
+    warningAllowed: bool = False
+    overlayAllowed: bool = False
+    scanPhase: str = "UNKNOWN"
+    navigationId: str = "unknown"
+    frameId: int = 0
+    featureVector: dict[str, Any] = Field(default_factory=dict)
+    destinationRoles: list[str] = Field(default_factory=list)
+    interactionTimeline: list[dict[str, Any]] = Field(default_factory=list)
+    shadowComparison: dict[str, Any] | None = None
+    reviewRequired: bool = True
+    poisoningRiskNote: str = "User labels must be reviewed before retraining."
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {
@@ -159,6 +220,42 @@ def health() -> dict[str, Any]:
         "model": LOCAL_MODEL_NAME,
         "externalAi": False,
     }
+
+
+@app.post("/v1/reputation/check", response_model=ReputationCheckResult)
+def check_reputation(request: ReputationCheckRequest) -> ReputationCheckResult:
+    try:
+        hostname = normalize_hostname(request.hostname)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    checked_at = datetime.now(timezone.utc).isoformat()
+    local = load_reputation_seed().get(hostname)
+    web_risk = query_google_web_risk(hostname)
+
+    if web_risk.get("malicious"):
+        return ReputationCheckResult(
+            hostname=hostname, verdict="MALICIOUS", confidence="HIGH",
+            sources=["GOOGLE_WEB_RISK"], categories=web_risk.get("categories", []),
+            checkedAt=checked_at, providerStatus="ONLINE"
+        )
+
+    if local:
+        return ReputationCheckResult(
+            hostname=hostname,
+            verdict=local.get("verdict", "RISKY_CONTEXT"),
+            confidence=local.get("confidence", "MEDIUM"),
+            sources=[local.get("source", "ARGUS_REVIEWED_SEED")],
+            categories=local.get("categories", []),
+            firstSeen=local.get("firstSeen"), lastSeen=local.get("lastSeen"),
+            checkedAt=checked_at,
+            providerStatus="ONLINE" if web_risk.get("available") else "LOCAL_ONLY"
+        )
+
+    return ReputationCheckResult(
+        hostname=hostname, verdict="UNKNOWN", confidence="LOW", sources=[], categories=[],
+        checkedAt=checked_at,
+        providerStatus="ONLINE" if web_risk.get("available") else "LOCAL_ONLY"
+    )
 
 
 @app.post("/analyze", response_model=AnalysisResult)
@@ -175,6 +272,26 @@ async def demo_collect(request: Request) -> dict[str, Any]:
         "stored": False,
         "message": "Dummy plaintext demo payload received and discarded.",
     }
+
+
+@app.post("/feedback/false-positive")
+def collect_false_positive(report: FalsePositiveReport) -> dict[str, Any]:
+    FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    record = report.model_dump() if hasattr(report, "model_dump") else report.dict()
+    record["receivedAt"] = datetime.now(timezone.utc).isoformat()
+    record.pop("delivery", None)
+    with FALSE_POSITIVE_LOG.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n")
+    return {"ok": True, "reportId": report.reportId, "stored": True}
+
+
+@app.get("/feedback/stats")
+def feedback_stats() -> dict[str, Any]:
+    count = 0
+    if FALSE_POSITIVE_LOG.exists():
+        with FALSE_POSITIVE_LOG.open("r", encoding="utf-8") as handle:
+            count = sum(1 for line in handle if line.strip())
+    return {"ok": True, "falsePositiveReports": count, "path": str(FALSE_POSITIVE_LOG)}
 
 
 def build_local_model_result(signals: PageSignals) -> AnalysisResult:

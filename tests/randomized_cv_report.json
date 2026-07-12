@@ -1,0 +1,59 @@
+{
+  "name": "Project Argus Randomized Five-Fold Cross-Validation",
+  "generatedAt": "2026-07-11",
+  "epochsPerFold": 100,
+  "folds": [
+    {
+      "fold": 0,
+      "trainCases": 1200,
+      "validationCases": 200,
+      "correct": 188,
+      "safeFalsePositives": 0,
+      "fakeFalseNegatives": 0,
+      "levelAccuracy": 0.94
+    },
+    {
+      "fold": 1,
+      "trainCases": 1200,
+      "validationCases": 200,
+      "correct": 181,
+      "safeFalsePositives": 0,
+      "fakeFalseNegatives": 0,
+      "levelAccuracy": 0.905
+    },
+    {
+      "fold": 2,
+      "trainCases": 1200,
+      "validationCases": 200,
+      "correct": 200,
+      "safeFalsePositives": 0,
+      "fakeFalseNegatives": 0,
+      "levelAccuracy": 1
+    },
+    {
+      "fold": 3,
+      "trainCases": 1200,
+      "validationCases": 200,
+      "correct": 200,
+      "safeFalsePositives": 0,
+      "fakeFalseNegatives": 0,
+      "levelAccuracy": 1
+    },
+    {
+      "fold": 4,
+      "trainCases": 1200,
+      "validationCases": 200,
+      "correct": 200,
+      "safeFalsePositives": 0,
+      "fakeFalseNegatives": 0,
+      "levelAccuracy": 1
+    }
+  ],
+  "totals": {
+    "correct": 969,
+    "total": 1000,
+    "safeFalsePositives": 0,
+    "fakeFalseNegatives": 0,
+    "levelAccuracy": 0.969
+  }
+}
