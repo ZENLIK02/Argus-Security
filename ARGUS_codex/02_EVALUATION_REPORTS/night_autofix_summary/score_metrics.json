@@ -1,0 +1,23 @@
+{
+  "benignSamples": 4,
+  "benignMeanDisplayedScore": 2,
+  "benignMedianDisplayedScore": 1,
+  "benignP95DisplayedScore": 5,
+  "benignAbove5": 0,
+  "benignWarnings": 0,
+  "maliciousSamples": 7,
+  "maliciousDetectionRate": 1,
+  "directEvidenceRecall": 1,
+  "measuredBeforeAfter": {
+    "weakModelOnlyFixture": {
+      "before": 6,
+      "after": 1
+    },
+    "modernSpaFixture": {
+      "before": 60,
+      "after": 5
+    }
+  },
+  "publicSitesConfigured": 50,
+  "publicSitesActuallyLoaded": 0
+}

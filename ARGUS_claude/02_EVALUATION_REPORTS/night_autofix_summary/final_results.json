@@ -1,0 +1,97 @@
+{
+  "passedDeterministicThreeTimes": true,
+  "acceptanceCriteriaComplete": false,
+  "githubTouched": false,
+  "results": [
+    {
+      "pass": 1,
+      "command": "node tests/run_evidence_policy_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 1,
+      "command": "node tests/run_safe_policy_regressions.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 1,
+      "command": "node tests/run_policy_integration_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 1,
+      "command": "node tests/run_navigation_guard_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 1,
+      "command": "node tests/run_warning_path_audit.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 1,
+      "command": "node tests/run_detector_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_evidence_policy_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_safe_policy_regressions.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_policy_integration_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_navigation_guard_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_warning_path_audit.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 2,
+      "command": "node tests/run_detector_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_evidence_policy_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_safe_policy_regressions.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_policy_integration_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_navigation_guard_tests.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_warning_path_audit.js",
+      "exitCode": 0
+    },
+    {
+      "pass": 3,
+      "command": "node tests/run_detector_tests.js",
+      "exitCode": 0
+    }
+  ]
+}

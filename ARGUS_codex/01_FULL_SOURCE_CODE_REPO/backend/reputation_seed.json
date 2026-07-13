@@ -1,0 +1,16 @@
+{
+  "version": "2026-07-12",
+  "description": "Reviewed category-risk seeds. Entries are not assertions of phishing or confirmed data theft.",
+  "entries": [
+    {"hostname":"sexy365bet.net","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"mahagame66.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"ufafat15.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"ufanance21.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"lockdown168q.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"kingdom66r.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"www.affufac4.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED","AFFILIATE_REGISTRATION"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"hydra888t.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"brazil999b.cc","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"},
+    {"hostname":"1688sagame4.com","verdict":"RISKY_CONTEXT","confidence":"HIGH","source":"ARGUS_FIELD_INCIDENT_REVIEW","categories":["GAMBLING_UNVERIFIED"],"firstSeen":"2026-07-12","lastSeen":"2026-07-12"}
+  ]
+}

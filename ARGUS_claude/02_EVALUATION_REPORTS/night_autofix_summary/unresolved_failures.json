@@ -1,0 +1,7 @@
+[
+  {
+    "signature": "ERR_NETWORK_ACCESS_DENIED",
+    "reason": "Playwright Chromium returned chrome-error://chromewebdata with net::ERR_NETWORK_ACCESS_DENIED before any public response. The unpacked ARGUS service worker loaded correctly.",
+    "impact": "YouTube, Roblox, GitHub, ChatGPT, the 50-site public corpus, and Selenium comparison could not be accepted."
+  }
+]

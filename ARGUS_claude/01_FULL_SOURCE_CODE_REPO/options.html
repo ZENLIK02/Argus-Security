@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Argus Options</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060914;
+      --panel: #101827;
+      --border: #263a5c;
+      --text: #f5f8ff;
+      --muted: #9eb1cf;
+      --accent: #70d6ff;
+      --safe: #43d17d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, rgba(112, 214, 255, 0.16), transparent 30%), var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    main {
+      width: min(760px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 36px 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+    }
+
+    .subtitle {
+      margin: 6px 0 22px;
+      color: var(--muted);
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(16, 24, 39, 0.94);
+      padding: 20px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .field:last-of-type {
+      border-bottom: 0;
+    }
+
+    label {
+      font-weight: 700;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    input[type="url"],
+    input[type="number"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #07101f;
+      color: var(--text);
+      font: 14px Arial, Helvetica, sans-serif;
+      padding: 10px 12px;
+    }
+
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    button {
+      border: 1px solid rgba(112, 214, 255, 0.5);
+      border-radius: 6px;
+      background: rgba(112, 214, 255, 0.12);
+      color: var(--text);
+      cursor: pointer;
+      font: 700 14px Arial, Helvetica, sans-serif;
+      padding: 10px 14px;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #06111d;
+    }
+
+    #status {
+      min-height: 20px;
+      margin-top: 12px;
+      color: var(--safe);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Project Argus Options</h1>
+    <p class="subtitle">Demo-ready controls for the local Project Argus model, warnings, badge behavior, and presentation mode.</p>
+
+    <section class="panel">
+      <div class="field">
+        <label for="warningThreshold">Risk flag threshold</label>
+        <input id="warningThreshold" type="number" min="0" max="100" step="1">
+        <div class="hint">Retained for legacy/shadow report comparison. Evidence-first warnings require direct behavior and do not rely on this score threshold.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="progressiveScan" type="checkbox"> Progressive network observation</label>
+        <div class="hint">Shows OBSERVING first and waits before publishing the final decision.</div>
+      </div>
+
+      <div class="field">
+        <label for="observationWindowMs">Initial observation window (milliseconds)</label>
+        <input id="observationWindowMs" type="number" min="2000" max="10000" step="500">
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="sendFalsePositiveFeedback" type="checkbox"> Send false-positive reports to local collector</label>
+        <label for="feedbackEndpoint">Feedback endpoint</label>
+        <input id="feedbackEndpoint" type="url">
+        <div class="hint">Reports contain decision metadata only. Form values, cookies, request bodies, query strings, passwords, and OTP values are never included.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label"><input id="useReputation" type="checkbox"> Check domain reputation (local blocklist)</label>
+        <label for="reputationEndpoint">Reputation endpoint</label>
+        <input id="reputationEndpoint" type="url">
+        <div class="hint">Only the page domain is sent to the local backend collector. No URL path, query, or page content leaves the device. A blocklist match raises HIGH_RISK.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label">
+          <input id="showBadgeOnSafePages" type="checkbox">
+          Show badge on SAFE pages
+        </label>
+        <div class="hint">Turn this off for a quieter browsing demo. Suspicious and high-risk pages still show the badge.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label">
+          <input id="demoMode" type="checkbox">
+          Demo mode
+        </label>
+        <div class="hint">Keeps UI behavior stable for presentations and prevents repeated warning redraws from flickering.</div>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-label">
+          <input id="shadowMode" type="checkbox">
+          Evidence-policy shadow comparison
+        </label>
+        <div class="hint">Records privacy-safe legacy-versus-evidence-policy decisions in scan reports. Shadow results never control visible warnings.</div>
+      </div>
+
+      <div class="actions">
+        <button id="save" class="primary" type="button">Save Options</button>
+        <button id="reset" type="button">Reset Defaults</button>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script src="engine/feedback_endpoint.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

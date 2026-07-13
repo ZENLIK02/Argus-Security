@@ -1,0 +1,4 @@
+suite,passes,failures
+critical deterministic,3,0
+playwright browser,0,not-run
+selenium audit,0,not-run

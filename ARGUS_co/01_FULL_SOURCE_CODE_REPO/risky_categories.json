@@ -1,0 +1,550 @@
+{
+  "version": "6.0.0",
+  "_meta": {
+    "role": "REFERENCE_TAXONOMY",
+    "documentationOnly": true,
+    "notConsumedForScoring": true,
+    "description": "Human-readable category taxonomy and recommended actions. This file is NOT the scoring source. Detection weights, floors, priorities and thresholds live in engine/detection_policy.json; runtime keyword/pattern matching lives in content.js and service_worker.js; the final decision is made by engine/evidence_decision_policy.js. The keywords/urlPatterns/riskLevel fields below are illustrative only and are not read by the decision path.",
+    "authoritativeSources": {
+      "weights": "engine/detection_policy.json",
+      "decision": "engine/evidence_decision_policy.js",
+      "runtimeKeywords": "content.js"
+    }
+  },
+  "riskContexts": [
+    {
+      "id": "BANKING_LENDING",
+      "displayName": "Banking and lending impersonation"
+    },
+    {
+      "id": "INVESTMENT_CRYPTO",
+      "displayName": "Investment, brokerage, and crypto impersonation"
+    },
+    {
+      "id": "PAYMENT_WALLET",
+      "displayName": "Payment and digital-wallet impersonation"
+    },
+    {
+      "id": "GOVERNMENT_PUBLIC_SERVICE",
+      "displayName": "Government and public-service impersonation"
+    },
+    {
+      "id": "TELECOM_UTILITY",
+      "displayName": "Telecom, utility, and subscription impersonation"
+    },
+    {
+      "id": "SHOPPING_DELIVERY",
+      "displayName": "Shopping, marketplace, and parcel-delivery impersonation"
+    },
+    {
+      "id": "PLATFORM_ACCOUNT",
+      "displayName": "Platform, email, social, and cloud-account impersonation"
+    },
+    {
+      "id": "TECH_SUPPORT_SECURITY",
+      "displayName": "Technical-support and security-alert impersonation"
+    },
+    {
+      "id": "REWARD_JOB_CHARITY_FEE",
+      "displayName": "Reward, employment, charity, and advance-fee scams"
+    }
+  ],
+  "categories": [
+    {
+      "id": "FAKE_APP_STORE",
+      "displayName": "Fake App Store",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "google play",
+        "play store",
+        "galaxy store",
+        "download apk",
+        "install app",
+        "update app"
+      ],
+      "urlPatterns": [
+        "play-store",
+        "google-play",
+        "galaxy-store",
+        "app-update",
+        "secure-install"
+      ],
+      "signals": [
+        "unofficial domain",
+        "APK download",
+        "fake install button",
+        "app store logo imitation"
+      ],
+      "recommendedAction": "Show strong warning before APK download or credential entry."
+    },
+    {
+      "id": "PHISHING_LOGIN",
+      "displayName": "Phishing Login Page",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "login",
+        "sign in",
+        "verify account",
+        "password",
+        "otp",
+        "verification code"
+      ],
+      "urlPatterns": [
+        "secure-login",
+        "verify-account",
+        "account-update",
+        "login-confirm"
+      ],
+      "signals": [
+        "password field",
+        "OTP field",
+        "unofficial domain",
+        "brand impersonation"
+      ],
+      "recommendedAction": "Warn before the user enters account credentials."
+    },
+    {
+      "id": "FAKE_BANKING",
+      "displayName": "Fake Banking Page",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "bank",
+        "mobile banking",
+        "verify bank account",
+        "account locked",
+        "transfer",
+        "otp"
+      ],
+      "urlPatterns": [
+        "bank-secure",
+        "kbank-verify",
+        "scb-login",
+        "krungsri-update",
+        "wallet-secure"
+      ],
+      "signals": [
+        "password field",
+        "OTP field",
+        "banking keywords",
+        "fake support message"
+      ],
+      "recommendedAction": "Show critical financial phishing warning."
+    },
+    {
+      "id": "MALICIOUS_APK",
+      "displayName": "Malicious APK Download",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "download apk",
+        "mod apk",
+        "install apk",
+        "apk free",
+        "android update"
+      ],
+      "urlPatterns": [
+        ".apk",
+        "apk-download",
+        "mod-apk",
+        "free-apk",
+        "android-secure"
+      ],
+      "signals": [
+        "direct .apk link",
+        "unknown publisher",
+        "fake update message",
+        "install outside app store"
+      ],
+      "recommendedAction": "Warn and require explicit confirmation before continuing."
+    },
+    {
+      "id": "CONTENT_RISK",
+      "displayName": "Content Risk",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "adult",
+        "18+",
+        "xxx",
+        "porn",
+        "casino",
+        "slot",
+        "bet",
+        "jackpot"
+      ],
+      "urlPatterns": [
+        "xxx",
+        "adult",
+        "porn",
+        "casino",
+        "slot",
+        "bet"
+      ],
+      "signals": [
+        "adult keywords",
+        "gambling keywords",
+        "content category indicator without credential or APK behavior"
+      ],
+      "recommendedAction": "Show suspicious content warning only. Do not classify as HIGH_RISK unless concrete risky behavior appears."
+    },
+    {
+      "id": "GAMBLING",
+      "displayName": "Gambling / Betting Content",
+      "riskLevel": "RISKY_CONTEXT",
+      "keywords": [
+        "casino",
+        "slot",
+        "bet",
+        "jackpot",
+        "ufa",
+        "pgslot",
+        "บาคาร่า",
+        "คาสิโน",
+        "สล็อต",
+        "พนัน",
+        "ฝากถอน",
+        "เครดิตฟรี"
+      ],
+      "urlPatterns": [
+        "casino",
+        "slot",
+        "bet",
+        "jackpot",
+        "ufa",
+        "pgslot",
+        "game66"
+      ],
+      "signals": [
+        "gambling promotion",
+        "deposit button",
+        "bonus claim",
+        "line contact",
+        "many gambling banners",
+        "cross-domain form action",
+        "insecure form action",
+        "suspicious third-party requests"
+      ],
+      "recommendedAction": "Show a distinct unverified-gambling category caution before sensitive interaction. Never classify it as confirmed phishing or data theft from gambling keywords alone."
+    },
+    {
+      "id": "ADULT_CONTENT",
+      "displayName": "Adult Content",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "adult",
+        "18+",
+        "xxx",
+        "porn",
+        "sex",
+        "คลิปหลุด",
+        "เว็บโป๊"
+      ],
+      "urlPatterns": [
+        "xxx",
+        "adult",
+        "porn",
+        "18plus"
+      ],
+      "signals": [
+        "adult content keywords",
+        "aggressive popups",
+        "fake video player",
+        "download button",
+        "cross-domain form action",
+        "insecure form action",
+        "suspicious third-party requests"
+      ],
+      "recommendedAction": "Show content-risk warning by default. Never classify as phishing from adult keywords alone; increase risk only with password, OTP, payment form, APK download, cross-domain form action, insecure HTTP form action, suspicious third-party requests, hidden iframe, or fake download behavior."
+    },
+    {
+      "id": "INVESTMENT_SCAM",
+      "displayName": "Fake Investment / Crypto Scam",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "guaranteed profit",
+        "double your money",
+        "crypto bonus",
+        "ลงทุน",
+        "กำไรแน่นอน",
+        "ถอนเงินทันที"
+      ],
+      "urlPatterns": [
+        "crypto-profit",
+        "investment-bonus",
+        "fast-return",
+        "double-money"
+      ],
+      "signals": [
+        "guaranteed return",
+        "wallet connection",
+        "deposit request",
+        "fake testimonial"
+      ],
+      "recommendedAction": "Show high-risk financial scam warning."
+    },
+    {
+      "id": "TECH_SUPPORT_SCAM",
+      "displayName": "Tech Support Scam",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "your device is infected",
+        "call support",
+        "virus detected",
+        "security alert",
+        "remote support"
+      ],
+      "urlPatterns": [
+        "support-secure",
+        "device-alert",
+        "virus-warning",
+        "pc-cleaner"
+      ],
+      "signals": [
+        "fake virus alert",
+        "phone number displayed",
+        "remote control request"
+      ],
+      "recommendedAction": "Warn and advise closing the page."
+    },
+    {
+      "id": "PRIZE_SCAM",
+      "displayName": "Prize / Giveaway Scam",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "you won",
+        "claim reward",
+        "free iphone",
+        "lucky winner",
+        "รับรางวัล",
+        "ของแจก"
+      ],
+      "urlPatterns": [
+        "claim-reward",
+        "free-gift",
+        "lucky-winner",
+        "reward-center"
+      ],
+      "signals": [
+        "asks for personal data",
+        "countdown timer",
+        "survey before reward"
+      ],
+      "recommendedAction": "Show suspicious reward scam warning."
+    },
+    {
+      "id": "PIRATED_SOFTWARE",
+      "displayName": "Pirated Software / Crack Website",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "crack",
+        "keygen",
+        "serial key",
+        "free premium",
+        "mod",
+        "patched"
+      ],
+      "urlPatterns": [
+        "crack-download",
+        "keygen",
+        "free-premium",
+        "software-patch"
+      ],
+      "signals": [
+        "executable download",
+        "zip password",
+        "disable antivirus instruction"
+      ],
+      "recommendedAction": "Show high-risk download warning."
+    },
+    {
+      "id": "REDIRECT_SCAM",
+      "displayName": "Shortened / Redirect Link",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "redirecting",
+        "please wait",
+        "continue",
+        "skip ad"
+      ],
+      "urlPatterns": [
+        "bit.ly",
+        "tinyurl",
+        "shortlink",
+        "redirect",
+        "go.php"
+      ],
+      "signals": [
+        "multiple redirects",
+        "hidden final URL",
+        "ad gate"
+      ],
+      "recommendedAction": "Analyze final URL before allowing navigation."
+    },
+    {
+      "id": "FAKE_SHOPPING",
+      "displayName": "Fake Shopping Website",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "flash sale",
+        "90% off",
+        "limited offer",
+        "official sale",
+        "brand outlet"
+      ],
+      "urlPatterns": [
+        "official-sale",
+        "brand-outlet",
+        "shop-discount",
+        "clearance-sale"
+      ],
+      "signals": [
+        "unrealistic discount",
+        "fake brand name",
+        "payment before delivery",
+        "no contact information"
+      ],
+      "recommendedAction": "Show shopping scam caution."
+    },
+    {
+      "id": "MALVERTISING",
+      "displayName": "Malvertising / Scam Popup",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "allow notifications",
+        "your phone is infected",
+        "click allow",
+        "continue to download",
+        "download now"
+      ],
+      "urlPatterns": [
+        "ad-click",
+        "push-notify",
+        "download-now",
+        "allow-alert"
+      ],
+      "signals": [
+        "notification permission abuse",
+        "fake download button",
+        "popup loop",
+        "many clickable ad banners"
+      ],
+      "recommendedAction": "Warn before notifications, ad gates, or downloads."
+    },
+    {
+      "id": "DATA_EXFILTRATION",
+      "displayName": "Data Exfiltration Behavior",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "cross-domain form",
+        "third-party endpoint",
+        "hidden iframe",
+        "form submit",
+        "password focus"
+      ],
+      "urlPatterns": [
+        "collect",
+        "submit",
+        "track",
+        "gate",
+        "redirect"
+      ],
+      "signals": [
+        "cross-domain form action",
+        "password field sent to different domain",
+        "OTP/payment form sent to different domain",
+        "third-party requests after form interaction",
+        "hidden iframe with sensitive form"
+      ],
+      "recommendedAction": "Show high-risk warning because user data may be sent to unrelated endpoints."
+    },
+    {
+      "id": "INSECURE_FORM_SUBMISSION",
+      "displayName": "Insecure Form Submission",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "http form",
+        "insecure submit",
+        "password over http",
+        "otp over http"
+      ],
+      "urlPatterns": [
+        "http://"
+      ],
+      "signals": [
+        "form action uses HTTP",
+        "password form uses HTTP",
+        "OTP/payment form uses HTTP"
+      ],
+      "recommendedAction": "Show high-risk warning before submitting sensitive information over HTTP."
+    },
+    {
+      "id": "BRAND_IMPERSONATION",
+      "displayName": "Brand Impersonation",
+      "riskLevel": "HIGH_RISK",
+      "keywords": [
+        "official",
+        "support",
+        "secure",
+        "verify",
+        "account center"
+      ],
+      "urlPatterns": [
+        "faceb00k",
+        "g00gle",
+        "paypal-secure",
+        "samsunng",
+        "micros0ft"
+      ],
+      "signals": [
+        "typosquatting",
+        "brand logo imitation",
+        "login form",
+        "fake support"
+      ],
+      "recommendedAction": "Show high-risk impersonation warning."
+    },
+    {
+      "id": "SUSPICIOUS_DOWNLOAD",
+      "displayName": "Suspicious Download Sequence",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "download after submit",
+        "automatic download",
+        "unexpected file"
+      ],
+      "urlPatterns": [
+        "download",
+        "get-file",
+        "delivery"
+      ],
+      "signals": [
+        "download after form submission",
+        "cross-domain redirect before download",
+        "unexpected download interaction"
+      ],
+      "recommendedAction": "Warn when a download follows a sensitive interaction or unexpected redirect."
+    },
+    {
+      "id": "UNKNOWN_SENSITIVE_FORM",
+      "displayName": "Unknown Sensitive Form",
+      "riskLevel": "SUSPICIOUS",
+      "keywords": [
+        "login",
+        "verify",
+        "payment",
+        "otp",
+        "password"
+      ],
+      "urlPatterns": [
+        "new-domain",
+        "unknown-login",
+        "secure-form"
+      ],
+      "signals": [
+        "password field",
+        "payment field",
+        "unknown domain",
+        "no reputation data"
+      ],
+      "recommendedAction": "Show caution and ask for extra confirmation."
+    }
+  ]
+}

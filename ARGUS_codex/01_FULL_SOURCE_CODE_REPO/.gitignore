@@ -1,0 +1,16 @@
+backend/venv/
+backend/.env
+*.zip
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+node_modules/
+.npm-cache/
+.env
+Website_testonly/
+reports/night_autofix/profiles/
+reports/night_autofix/artifacts/
+reports/night_autofix/npm-cache/
+reports/night_autofix/logs/
+reports/night_autofix/browser_results.jsonl

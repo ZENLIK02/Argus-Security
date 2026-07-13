@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Argus Verified Network Demo</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #07101f; color: #eef7ff; }
+    main { max-width: 620px; margin: 48px auto; padding: 24px; }
+    form { display: grid; gap: 12px; padding: 20px; border: 1px solid #ff5265; border-radius: 8px; }
+    input, button { padding: 11px; border-radius: 5px; border: 1px solid #36516b; }
+    button { background: #d9394d; color: white; font-weight: 700; cursor: pointer; }
+    #status { min-height: 24px; color: #8bdcff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Verified network telemetry demo</h1>
+    <p>This local-only test sends no real credentials and never stores form values.</p>
+    <form id="demo-form">
+      <label>Demo account <input name="demo_account" value="argus-demo" autocomplete="username"></label>
+      <label>Demo password <input type="password" name="demo_password" value="not-a-real-password" autocomplete="current-password"></label>
+      <button type="submit">Run local telemetry test</button>
+    </form>
+    <p id="status" aria-live="polite"></p>
+  </main>
+  <script>
+    document.getElementById("demo-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const endpoint = `http://localhost:${window.location.port}/argus-test-sink`;
+      document.getElementById("status").textContent = "Sending synthetic local test event...";
+      try {
+        await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ demo: true }) });
+        document.getElementById("status").textContent = "Synthetic event sent. Argus should rescan as HIGH RISK.";
+      } catch (error) {
+        document.getElementById("status").textContent = "The local test sink did not respond.";
+      }
+    });
+  </script>
+</body>
+</html>

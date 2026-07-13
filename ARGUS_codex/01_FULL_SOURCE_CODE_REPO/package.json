@@ -1,0 +1,15 @@
+{
+  "name": "project-argus-extension",
+  "version": "5.3.0",
+  "private": true,
+  "description": "Workspace-local real-browser validation harness for Project Argus.",
+  "//": "The Node unit test suite (tests/run_*.js) needs NO dependencies — run it with `node tests/<file>.js`. Playwright is only used by the optional `test:browser` harness; it is vendored under vendor/ and marked optional so a plain `npm install` never fails when it is absent or offline.",
+  "scripts": {
+    "test:browser": "node tests/run_real_browser_audit.js",
+    "night:autofix": "node scripts/night_autofix_controller.js"
+  },
+  "optionalDependencies": {
+    "playwright": "file:vendor/playwright-1.61.1.tgz",
+    "playwright-core": "file:vendor/playwright-core-1.61.1.tgz"
+  }
+}

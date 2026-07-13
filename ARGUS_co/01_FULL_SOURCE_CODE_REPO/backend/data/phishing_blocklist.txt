@@ -1,0 +1,17 @@
+# Project Argus — local phishing/malware domain blocklist (P1 seed)
+#
+# One registrable domain per line; "#" starts a comment. A listed domain also
+# matches its subdomains (example.com flags login.example.com).
+#
+# THIS IS A SEED. Replace/refresh from real feeds for production coverage:
+#   - abuse.ch URLhaus            https://urlhaus.abuse.ch/downloads/
+#   - OpenPhish                   https://openphish.com/feed.txt
+#   - PhishTank                   https://phishtank.org/developer_info.php
+#   - Google Safe Browsing        (proxy via this backend; hash-prefix API)
+#
+# The entries below are RFC 2606 reserved example domains used only to exercise
+# the end-to-end pipeline (they resolve nowhere). Add a domain here and revisit it
+# in Chrome to see a HIGH_RISK "known blocklist" verdict.
+phishing-example.invalid
+fake-bank-login.example
+argus-reputation-selftest.invalid

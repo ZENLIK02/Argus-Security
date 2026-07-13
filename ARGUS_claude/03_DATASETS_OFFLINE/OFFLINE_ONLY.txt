@@ -1,0 +1,21 @@
+OFFLINE TRAINING/EVALUATION ASSETS — DO NOT BUNDLE
+==================================================
+
+These JSON corpora are offline training and evaluation assets ONLY.
+
+RULES (from Project Argus non-negotiable constraints):
+- MUST NOT be bundled into the Chrome extension runtime.
+- MUST NOT be included in any release/submission ZIP.
+- The Chrome runtime loads only engine/trained_model.js|json + normalization
+  weights — never these raw corpora.
+- Used exclusively by offline scripts (scripts/train_full_mega_model.py,
+  scripts/import_*.py) and calibration test runners under tests/.
+
+A working copy of these files also lives in
+  ..\01_FULL_SOURCE_CODE_REPO\datasets\
+because the calibration/regression test runners read them via relative paths.
+This 03_DATASETS_OFFLINE folder is the curated portfolio/presentation copy.
+
+Contents: normalized eval + calibration corpora, phishing/benign URL seeds,
+regression replay vectors, popular-domains list (~10k). No passwords, OTPs,
+cookies, request bodies, or private content are present.

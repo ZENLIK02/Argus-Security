@@ -1,0 +1,47 @@
+PROJECT ARGUS — START HERE
+==========================
+
+Local-first Chrome MV3 extension that flags risky web pages from BROWSER-OBSERVED
+evidence (sensitive data movement, insecure transport, unknown cross-domain writes,
+post-interaction beacons). Evidence-first decision policy; 69-feature local model is
+advisory only. No external AI. Manifest 5.1.1 / model 5.0.0 / policy evidence-first-v2.
+
+This ARGUS\ folder is a CLEAN ORGANIZED COPY (portfolio layout) of the working repo
+at C:\Users\User\Desktop\Project-Argus-Extension. That original is UNTOUCHED and
+remains the live development tree. Junk (node_modules, backend\venv, caches, 231 MB
+night_autofix artifacts, tmp) was excluded from this copy.
+
+FOLDERS
+-------
+00_README\                 this file + full handoff + project instructions
+01_FULL_SOURCE_CODE_REPO\  clean runnable source; ALSO the Load-unpacked target
+02_EVALUATION_REPORTS\     calibration report, night_autofix summary, architecture PDF
+03_DATASETS_OFFLINE\       offline training/eval corpora — NEVER bundle (see OFFLINE_ONLY.txt)
+ARGUS_progress.md          migration log + known issues + open browser-verify tasks
+
+LOAD THE EXTENSION
+------------------
+1. chrome://extensions  ->  enable Developer mode
+2. Load unpacked  ->  select 01_FULL_SOURCE_CODE_REPO
+3. Confirm card shows version 5.1.1
+4. After any source edit: click Reload, then refresh open tabs (content script re-injects)
+
+RUN THE REQUIRED TEST SUITE (from 01_FULL_SOURCE_CODE_REPO)
+----------------------------------------------------------
+   node tests\run_evidence_policy_tests.js
+   node tests\run_exfiltration_pipeline_regressions.js
+   node tests\run_policy_integration_tests.js
+   node tests\run_safe_policy_regressions.js
+   node tests\run_navigation_guard_tests.js
+
+RUNTIME DEMO (needs Node)
+-------------------------
+   node scripts\serve_argus_test_site.js
+   open http://127.0.0.1:4173/verified-network-exfil-demo.html
+   press "Run local telemetry test", wait ~5-6 s, read the bottom-left badge/detail panel.
+
+OPTIONAL LOCAL BACKEND (not required for scanning; feedback collector only)
+--------------------------------------------------------------------------
+   cd 01_FULL_SOURCE_CODE_REPO\backend
+   python -m venv venv ; venv\Scripts\activate ; pip install -r requirements.txt
+   uvicorn main:app --reload --port 8000

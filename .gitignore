@@ -1,0 +1,16 @@
+# Root safety net — each fork also carries its own .gitignore.
+node_modules/
+.npm-cache/
+venv/
+__pycache__/
+*.pyc
+*.zip
+.env
+.DS_Store
+Thumbs.db
+# Never publish captured Chrome profiles or night-autofix artifacts
+# (they contain cookies / Login Data).
+reports/night_autofix/profiles/
+reports/night_autofix/artifacts/
+reports/night_autofix/npm-cache/
+reports/night_autofix/logs/

@@ -1,0 +1,3 @@
+case,playwright,argus_popup,selenium,result
+local fixtures,observed,observed,not-installed,partial
+public corpus,network-blocked,not-observed,not-run,blocked

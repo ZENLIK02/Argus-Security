@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Argus</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #060914;
+      --panel: #101827;
+      --panel-border: #263a5c;
+      --text: #f5f8ff;
+      --muted: #96a7c4;
+      --safe: #43d17d;
+      --suspicious: #ffc857;
+      --high: #ff4d5e;
+      --accent: #70d6ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 360px;
+      margin: 0;
+      padding: 18px;
+      background: radial-gradient(circle at top left, rgba(112, 214, 255, 0.16), transparent 32%), var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 4px 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card {
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: rgba(16, 24, 39, 0.92);
+      padding: 16px;
+    }
+
+    .label {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    #domain {
+      margin: 0 0 14px;
+      color: var(--text);
+      font-size: 13px;
+      word-break: break-word;
+    }
+
+    .score-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    #score {
+      font-size: 38px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    #level {
+      border-radius: 999px;
+      padding: 5px 9px;
+      border: 1px solid currentColor;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .safe {
+      color: var(--safe);
+    }
+
+    .suspicious {
+      color: var(--suspicious);
+    }
+
+    .monitoring {
+      color: var(--accent);
+    }
+
+    .high-risk {
+      color: var(--high);
+    }
+
+    .meta-line {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .guard-section {
+      margin-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      padding-top: 14px;
+    }
+
+    .analyzer-list {
+      display: grid;
+      gap: 6px;
+    }
+
+    .analyzer-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 10px;
+      border-left: 2px solid var(--panel-border);
+      padding: 6px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .analyzer-item[data-status="FINDINGS"] {
+      border-left-color: var(--suspicious);
+    }
+
+    .analyzer-item strong {
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .guard-title {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .guard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .guard-item {
+      border: 1px solid rgba(112, 214, 255, 0.22);
+      border-radius: 6px;
+      background: rgba(112, 214, 255, 0.07);
+      padding: 8px;
+    }
+
+    .guard-item span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .guard-item strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    #reasons {
+      margin: 14px 0 0;
+      padding-left: 18px;
+      color: #dce6f8;
+      font-size: 13px;
+    }
+
+    #reasons li {
+      margin-bottom: 7px;
+    }
+
+    .empty {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    button {
+      border: 1px solid rgba(112, 214, 255, 0.42);
+      border-radius: 6px;
+      background: rgba(112, 214, 255, 0.1);
+      color: var(--text);
+      cursor: pointer;
+      font: 700 13px Arial, Helvetica, sans-serif;
+      padding: 10px 12px;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #06111d;
+    }
+
+    button:hover,
+    button:focus {
+      border-color: rgba(112, 214, 255, 0.9);
+      outline: 2px solid rgba(112, 214, 255, 0.25);
+      outline-offset: 2px;
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: 0.55;
+    }
+  </style>
+</head>
+<body>
+  <h1>Project Argus</h1>
+  <p class="subtitle">Browser security prototype</p>
+
+  <section class="card" aria-live="polite">
+    <p class="label">Current domain</p>
+        <p id="domain" data-testid="argus-domain">Loading...</p>
+
+    <div class="score-row">
+          <div id="score" data-testid="argus-policy-score">--</div>
+          <div id="level" data-testid="argus-policy-status">Scanning</div>
+    </div>
+
+    <p id="category" class="meta-line">Category: waiting</p>
+    <p id="source" class="meta-line">Source: waiting</p>
+    <p id="trusted" class="meta-line">Trusted domain: waiting</p>
+    <p id="model" class="meta-line">Model: waiting</p>
+          <p id="confidence" data-testid="argus-confidence" class="meta-line">Confidence: waiting</p>
+          <p id="policy" data-testid="argus-policy-version" class="meta-line">Policy: waiting</p>
+    <p id="decisionTier" class="meta-line">Decision tier: waiting</p>
+    <p id="evidenceLevel" class="meta-line">Evidence level: waiting</p>
+    <p id="warningPermission" class="meta-line">Warning permission: waiting</p>
+    <div class="guard-section" aria-label="Data Leak Guard">
+      <p class="guard-title">Data Leak Guard</p>
+      <div id="guardGrid" class="guard-grid"></div>
+    </div>
+    <div class="guard-section" aria-label="Analyzer evidence">
+      <p class="guard-title">Analyzer Evidence</p>
+      <div id="analyzerList" class="analyzer-list"></div>
+    </div>
+    <ul id="reasons"></ul>
+    <p id="empty" class="empty" hidden>No scan has been recorded for this tab yet. Refresh the page and open this popup again.</p>
+    <div class="actions">
+        <button id="exportReport" data-testid="argus-export-report" class="primary" type="button">Export Scan Report</button>
+      <button id="reportFalsePositive" type="button">Report False Positive</button>
+      <button id="openOptions" type="button">Open Options</button>
+      <button id="clearScan" type="button">Clear Last Scan</button>
+      <p id="feedbackStatus" class="meta-line" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <script src="engine/scan_freshness.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

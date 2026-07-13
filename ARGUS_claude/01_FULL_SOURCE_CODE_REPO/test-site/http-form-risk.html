@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo HTTP Form Risk</title>
+  <style>
+    body {
+      margin: 0;
+      background: #151019;
+      color: #fff8fb;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    main {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 48px 20px;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+      border: 1px solid #ff4d5e;
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    input,
+    button {
+      border-radius: 6px;
+      border: 1px solid #5f2d3a;
+      padding: 11px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Expected result: HIGH_RISK because password and OTP metadata submit to an HTTP form action.</p>
+    <h1>Verify account</h1>
+    <form action="http://insecure.example-submit.net/verify" method="post">
+      <label>User ID <input name="user_id" autocomplete="username"></label>
+      <label>Password <input type="password" name="password" autocomplete="current-password"></label>
+      <label>OTP code <input name="otp_code" placeholder="verification code"></label>
+      <button type="submit">Verify account</button>
+    </form>
+  </main>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-12",
+  "labelPolicy": "These user-supplied samples are category-risk regression inputs, not verified claims of phishing or data theft.",
+  "expectedPolicyStatus": "RISKY_CONTEXT",
+  "cases": [
+    {"hostname":"sexy365bet.net","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"mahagame66.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"ufafat15.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"ufanance21.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"lockdown168q.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"kingdom66r.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"www.affufac4.com","label":"GAMBLING_UNVERIFIED","notes":["affiliate registration path was supplied but is not retained"]},
+    {"hostname":"hydra888t.com","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"brazil999b.cc","label":"GAMBLING_UNVERIFIED"},
+    {"hostname":"1688sagame4.com","label":"GAMBLING_UNVERIFIED"}
+  ]
+}

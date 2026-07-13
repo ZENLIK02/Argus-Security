@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modern SPA Documentation</title>
+</head>
+<body>
+  <main>
+    <h1>Account verification code documentation</h1>
+    <p>This documentation page explains where users can find verification help. It does not collect credentials.</p>
+    <label>Search documentation <input type="search" name="documentation-search"></label>
+    <section id="recommendations" aria-live="polite"></section>
+  </main>
+  <script>
+    const endpointParts = ["/api", "/recommendations"];
+    const endpoint = endpointParts.join("");
+    setTimeout(() => {
+      fetch(endpoint, { method: "GET" })
+        .then(() => { document.querySelector("#recommendations").textContent = "Recommendations loaded."; })
+        .catch(() => {});
+    }, 500);
+  </script>
+</body>
+</html>
