@@ -17,6 +17,7 @@ const cases = [
   ["sensitive context plus one SPA group", decide([finding("OTP_UNKNOWN_DOMAIN"), finding("DYNAMIC_ENDPOINT")], 70), "MONITORING", false],
   ["images and ads only", decide([finding("AGGRESSIVE_AD_LAYOUT", "MALVERTISING")], 45), "SAFE", false],
   ["unverified gambling category", decide([finding("GAMBLING_CONTENT", "GAMBLING")], 80), "RISKY_CONTEXT", false],
+  ["unverified gambling category, low legacy score", decide([finding("GAMBLING_CONTENT", "GAMBLING")], 20), "RISKY_CONTEXT", false],
   ["gambling before sensitive action", decide([finding("GAMBLING_CONTENT", "GAMBLING"), finding("SENSITIVE_ACTION_SURFACE", "SENSITIVE_ACTION")], 80), "RISKY_CONTEXT", false],
   ["adult category only", decide([finding("ADULT_CONTENT", "ADULT")], 80), "SAFE", false],
   ["apk download link only", decide([finding("APK_HREF", "MALICIOUS_APK")], 40), "MONITORING", false],
@@ -24,6 +25,7 @@ const cases = [
   ["reputation malicious verdict (no other evidence)", decide([], 10, { reputation: { listed: false, verdict: "MALICIOUS", source: "GOOGLE_WEB_RISK" } }), "HIGH_RISK", true],
   ["confirmed malicious reputation (legacy alias evidence)", decide([finding("REPUTATION_CONFIRMED_MALICIOUS", "THREAT_INTELLIGENCE")], 90), "HIGH_RISK", true],
   ["reputation risky-context verdict", decide([], 10, { reputation: { listed: false, verdict: "RISKY_CONTEXT", source: "REVIEWED_SEED" } }), "RISKY_CONTEXT", false],
+  ["reputation risky-context verdict, high legacy score", decide([], 90, { reputation: { listed: false, verdict: "RISKY_CONTEXT", source: "REVIEWED_SEED" } }), "RISKY_CONTEXT", false],
   ["reputation clean", decide([], 10, { reputation: { listed: false } }), "SAFE", false],
   ["reputation trusted verdict", decide([], 10, { reputation: { listed: false, verdict: "TRUSTED" } }), "SAFE", false],
   ["homoglyph brand domain", decide([finding("HOMOGLYPH_BRAND_DOMAIN", "BRAND_IMPERSONATION")], 20), "HIGH_RISK", true],
@@ -53,14 +55,22 @@ assert(cases.find((entry) => entry[0] === "adult category only")[1].score <= 10,
 assert(cases.find((entry) => entry[0] === "unverified gambling category")[1].score >= 35, "unverified gambling must display a category-risk score");
 assert(cases.find((entry) => entry[0] === "unverified gambling category")[1].warningAllowed, "unverified gambling must allow a non-overlay warning");
 assert(cases.find((entry) => entry[0] === "unverified gambling category")[1].warningStage === "BADGE", "gambling caution must start at the badge stage");
+assert(
+  cases.find((entry) => entry[0] === "unverified gambling category")[1].score
+    !== cases.find((entry) => entry[0] === "unverified gambling category, low legacy score")[1].score,
+  "RISKY_CONTEXT score must vary with the underlying evidence strength, not stay fixed"
+);
 assert(cases.find((entry) => entry[0] === "gambling before sensitive action")[1].evidenceLevel === "CONTEXT_WITH_SENSITIVE_ACTION", "sensitive gambling action must be explicit");
 const reputationCase = cases.find((entry) => entry[0] === "reputation blocklisted (no other evidence)")[1];
 assert(reputationCase.reputationDirectEvidenceIds.includes("REPUTATION_BLOCKLISTED"), "reputation blocklist hit did not create direct evidence");
 assert(reputationCase.score >= 90, "reputation blocklist hit must be top-severity");
 assert(reputationCase.warningAllowed, "reputation blocklist hit must allow a warning");
 const riskyContextReputation = cases.find((entry) => entry[0] === "reputation risky-context verdict")[1];
-assert(riskyContextReputation.score === 48, "reputation risky-context verdict must score 48");
+assert(riskyContextReputation.score === 48, "reputation risky-context verdict with a low legacy score must score at the 48 floor");
 assert(riskyContextReputation.warningAllowed, "reputation risky-context verdict must allow a non-overlay warning");
+const riskyContextReputationHigh = cases.find((entry) => entry[0] === "reputation risky-context verdict, high legacy score")[1];
+assert(riskyContextReputationHigh.score > riskyContextReputation.score, "RISKY_CONTEXT score must scale up with a stronger underlying legacy score, not stay fixed at 48");
+assert(riskyContextReputationHigh.score <= 59, "RISKY_CONTEXT score must stay below the SUSPICIOUS band");
 assert(cases.find((entry) => entry[0] === "beacon intent plus dynamic endpoint")[1].evidenceGroups.length >= 2, "SUSPICIOUS requires two independent groups");
 assert(cases.find((entry) => entry[0] === "sensitive context plus one SPA group")[1].score <= 10, "one uncorrelated behavioral group must not score above 10");
 assert(cases.find((entry) => entry[0] === "static dynamic plus hidden frame")[1].score <= 10 && cases.find((entry) => entry[0] === "static dynamic plus consent logic")[1].score <= 10, "static intent groups must not score above 10 without observed behavior");

@@ -162,8 +162,11 @@
       evidenceLevel = impersonationPhishing && !correlatedBehavior && !identitySuspicious ? "BRAND_IMPERSONATION_PHISHING" : "CORRELATED";
     } else if (contextRisk) {
       status = "RISKY_CONTEXT";
-      score = sensitiveAction || reputationVerdict === "RISKY_CONTEXT" ? 48 : 40;
-      confidence = sensitiveAction || reputationVerdict === "RISKY_CONTEXT" ? "HIGH" : "MEDIUM";
+      const highConfidenceContext = sensitiveAction || reputationVerdict === "RISKY_CONTEXT";
+      score = highConfidenceContext
+        ? Math.max(48, Math.min(59, Number(legacy.score) || 48))
+        : Math.max(35, Math.min(47, Number(legacy.score) || 35));
+      confidence = highConfidenceContext ? "HIGH" : "MEDIUM";
       evidenceLevel = sensitiveAction ? "CONTEXT_WITH_SENSITIVE_ACTION" : "IDENTITY_OR_CATEGORY_RISK";
     } else if (adsOnly || categoryOnly || lowContextOnly) {
       status = "SAFE";
